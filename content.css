@@ -1,0 +1,144 @@
+/*
+ * Fake Fullscreen / Theater Mode — content stylesheet
+ * ------------------------------------------------------------------
+ * Injected automatically via manifest.json into every frame.
+ *
+ * Everything is namespaced under `.ffs-*` and liberally uses
+ * !important, because site stylesheets love to fight injected UI.
+ *
+ * Tuning knobs:
+ *   - Button look ............ .ffs-btn  (colors / padding / radius)
+ *   - Backdrop darkness ...... --ffs-dim (set from JS via options page)
+ *   - Theater geometry ....... video.ffs-video--theater
+ */
+
+/* ---------------------------------------------------------------
+ * The floating "Theater" button (one per detected <video>).
+ * Positioned with transform: translate(x, y) from content.js,
+ * so it must stay at top:0/left:0.
+ * --------------------------------------------------------------- */
+.ffs-btn {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 2147483647 !important; /* same as theater video — DOM order decides */
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 7px 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgb(255 255 255 / 0.16) !important;
+  background: rgb(17 17 24 / 0.85) !important;
+  color: #fff !important;
+  font: 500 12px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer !important;
+  user-select: none !important;
+  opacity: 0;
+  pointer-events: none;
+  /* Actual position is set inline by content.js */
+  transform: translate(-300px, -300px);
+  transition: opacity 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.38) !important;
+  will-change: transform;
+}
+
+.ffs-btn--visible {
+  opacity: 0.95;
+  pointer-events: auto;
+}
+
+.ffs-btn:hover {
+  background: rgb(38 38 50 / 0.95) !important;
+  box-shadow: 0 8px 26px rgb(0 0 0 / 0.45) !important;
+}
+
+.ffs-btn:active {
+  filter: brightness(1.25);
+}
+
+.ffs-btn:focus-visible {
+  outline: 2px solid #9db4ff;
+  outline-offset: 2px;
+}
+
+/* While its video is in theater mode the button becomes the (subtle)
+   exit control: icon only, muted, low-contrast — not a red beacon. */
+.ffs-btn--active {
+  background: rgb(17 17 24 / 0.6) !important;
+  border-color: rgb(255 255 255 / 0.1) !important;
+  padding: 6px !important; /* tighter → just fits the icon */
+  opacity: 0.8;
+}
+
+.ffs-btn--active:hover {
+  background: rgb(34 34 44 / 0.75) !important;
+  opacity: 1;
+}
+
+.ffs-btn svg {
+  display: block;
+  flex: none;
+}
+
+/* ---------------------------------------------------------------
+ * Dark backdrop shown behind the theater video.
+ * Sits one z-level below the video; clicking it exits (optional).
+ * --------------------------------------------------------------- */
+.ffs-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483646 !important; /* MAX - 1 → just under the video */
+  background: rgb(0 0 0 / var(--ffs-dim, 0.78)) !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.ffs-overlay--shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------
+ * The theater video itself.
+ * One class does all the work — applied to the original <video>
+ * element, no reparenting needed in the common case.
+ * --------------------------------------------------------------- */
+video.ffs-video--theater {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  transform: none !important;
+  filter: none !important;
+  clip-path: none !important;
+  z-index: 2147483647 !important; /* max signed 32-bit int */
+  object-fit: contain !important; /* letterbox instead of stretch */
+  background: #000 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+/* ---------------------------------------------------------------
+ * Scroll lock helper (also set inline by content.js; this is a
+ * belt-and-braces override against site !important rules).
+ * --------------------------------------------------------------- */
+html.ffs-scroll-locked {
+  overflow: hidden !important;
+}

@@ -1,0 +1,10 @@
+# Build / packaging output
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / editor noise
+.DS_Store
+*.swp

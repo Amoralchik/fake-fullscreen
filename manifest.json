@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Fake Fullscreen – Theater Mode",
+  "version": "1.0.0",
+  "description": "Put any HTML5 video into a borderless theater view that fills the whole tab — no OS-level fullscreen involved.",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "fake-fullscreen@local.addon",
+      "strict_min_version": "115.0"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+
+  "permissions": ["storage"],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "action": {
+    "default_title": "Toggle Fake Fullscreen (theater mode)",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+
+  "commands": {
+    "toggle-fake-fullscreen": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "MacCtrl+Shift+F"
+      },
+      "description": "Toggle fake fullscreen (theater mode) for the best video on the page"
+    }
+  },
+
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ]
+}

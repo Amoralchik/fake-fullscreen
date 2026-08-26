@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fake Fullscreen – Settings</title>
+  <style>
+    /* Small, dependency-free settings UI in the same visual language
+       as the injected button (dark pill, indigo accent). */
+    :root {
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #e8e8ef;
+      background: #14141b;
+      display: flex;
+      justify-content: center;
+    }
+    .card {
+      width: 100%;
+      max-width: 560px;
+      background: #1c1c26;
+      border: 1px solid rgb(255 255 255 / 0.08);
+      border-radius: 14px;
+      padding: 24px 26px;
+      box-shadow: 0 12px 40px rgb(0 0 0 / 0.4);
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h1 .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #4338ca);
+      box-shadow: 0 0 10px #6366f1aa;
+    }
+    .sub { margin: 0 0 20px; color: #9a9aac; font-size: 12.5px; }
+
+    fieldset { border: 0; margin: 0; padding: 0; }
+
+    label.row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 9px 10px;
+      margin: 2px -10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    label.row:hover { background: rgb(255 255 255 / 0.04); }
+    label.row input[type="checkbox"] {
+      width: 16px; height: 16px; margin-top: 2px; accent-color: #6366f1;
+      flex: none;
+    }
+    .row-text b { display: block; font-weight: 600; }
+    .row-text span { color: #9a9aac; font-size: 12.5px; }
+
+    .field { margin-top: 18px; }
+    .field > .row-text { margin-bottom: 6px; }
+
+    input[type="range"] {
+      width: 100%; accent-color: #6366f1;
+    }
+
+    /* Per-site rules */
+    .rule-add {
+      display: flex;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .rule-add input {
+      flex: 1;
+      background: #14141b;
+      color: #e8e8ef;
+      border: 1px solid rgb(255 255 255 / 0.12);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+    }
+    .rule-add input:focus { outline: 2px solid #6366f1; outline-offset: 1px; }
+    .rule-add select {
+      background: #14141b;
+      color: #e8e8ef;
+      border: 1px solid rgb(255 255 255 / 0.12);
+      border-radius: 8px;
+      padding: 0 8px;
+      font: inherit;
+    }
+    .rule-add button {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 14px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .rule-add button:hover { filter: brightness(1.15); }
+
+    ul.rule-list {
+      list-style: none;
+      margin: 6px 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    ul.rule-list:empty::after {
+      content: "No rules yet — every site uses the default above.";
+      color: #6f6f80;
+      font-size: 12.5px;
+    }
+    li.rule {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgb(255 255 255 / 0.03);
+      border: 1px solid rgb(255 255 255 / 0.06);
+      border-radius: 8px;
+      padding: 7px 10px;
+    }
+    li.rule .domain {
+      flex: 1;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-all;
+    }
+    li.rule .state { color: #9a9aac; font-size: 12px; min-width: 26px; text-align: right; }
+    li.rule input[type="checkbox"] { width: 15px; height: 15px; accent-color: #6366f1; }
+    li.rule .remove {
+      background: transparent;
+      border: 0;
+      color: #9a9aac;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+    }
+    li.rule .remove:hover { color: #ff7b7b; }
+
+    .actions {
+      margin-top: 22px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    button {
+      font: inherit;
+      font-weight: 600;
+      padding: 9px 18px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    #save {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+    }
+    #save:hover { filter: brightness(1.15); }
+    #reset {
+      background: transparent;
+      color: #9a9aac;
+      border-color: rgb(255 255 255 / 0.14);
+    }
+    #reset:hover { color: #fff; }
+    #status {
+      color: #4ade80;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      font-size: 13px;
+    }
+    #status.show { opacity: 1; }
+
+    .shortcut-hint {
+      margin-top: 20px;
+      padding: 12px 14px;
+      background: rgb(99 102 241 / 0.08);
+      border: 1px solid rgb(99 102 241 / 0.25);
+      border-radius: 10px;
+      font-size: 12.5px;
+      color: #b6b9d8;
+    }
+    kbd {
+      font: 11.5px ui-monospace, Menlo, monospace;
+      background: #101017;
+      border: 1px solid rgb(255 255 255 / 0.16);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1><span class="dot"></span> Fake Fullscreen – Theater Mode</h1>
+    <p class="sub">Settings are synced across your browsers via Firefox Sync when available.</p>
+
+    <fieldset>
+      <label class="row" title="Turn everything off without uninstalling">
+        <input type="checkbox" id="masterEnabled" />
+        <span class="row-text"><b>Enable extension</b>
+          <span>Master switch — uncheck to pause everywhere.</span></span>
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="buttonEnabled" />
+        <span class="row-text"><b>Show the floating “Theater” button on videos</b>
+          <span>You can still use the toolbar icon or keyboard shortcut.</span></span>
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="buttonHoverOnly" />
+        <span class="row-text"><b>Only show the button while hovering a video</b>
+          <span>Uncheck to keep buttons visible on every detected video.</span></span>
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="hideNativeControls" />
+        <span class="row-text"><b>Hide native controls in theater mode</b>
+          <span>Clean picture with no play/pause bar. Restored on exit.</span></span>
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="clickOutsideExits" />
+        <span class="row-text"><b>Click outside the video exits theater mode</b>
+          <span>You can always exit with Esc or the button.</span></span>
+      </label>
+    </fieldset>
+
+    <div class="field">
+      <div class="row-text"><b>Backdrop darkness</b>
+        <span id="dimOut"></span></div>
+      <input type="range" id="dimLevel" min="0.3" max="0.95" step="0.05" />
+    </div>
+
+    <div class="field">
+      <div class="row-text"><b>Default for sites without a rule</b>
+        <span>On = theater works everywhere by default; Off = opt-in per site below.</span></div>
+      <label class="row" style="margin:0 -10px">
+        <input type="checkbox" id="defaultEnabled" />
+        <span class="row-text"><b id="defaultEnabledLabel">Run on all sites by default</b></span>
+      </label>
+    </div>
+
+    <div class="field">
+      <div class="row-text"><b>Per-site rules</b>
+        <span>Turn the extension on or off for specific domains. Subdomains are included.</span></div>
+      <div class="rule-add">
+        <input id="ruleDomain" placeholder="example.com" spellcheck="false" />
+        <select id="ruleState">
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <button id="addRule" type="button">Add</button>
+      </div>
+      <ul id="ruleList" class="rule-list"></ul>
+    </div>
+
+    <div class="actions">
+      <button id="save" type="button">Save</button>
+      <button id="reset" type="button">Reset defaults</button>
+      <span id="status" role="status">Saved ✓</span>
+    </div>
+
+    <div class="shortcut-hint">
+      Shortcut: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>
+      (<kbd>⌃</kbd>+<kbd>⇧</kbd>+<kbd>F</kbd> on macOS). Change it in
+      <b>about:addons → ⚙ gear → “Manage Extension Shortcuts”</b>.
+      Exit anytime with <kbd>Esc</kbd>, the icon, or double-click.
+    </div>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>
