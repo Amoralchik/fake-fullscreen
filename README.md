@@ -109,11 +109,13 @@ to `storage.local`). Changes apply to open tabs immediately.
    `{frameId}` toggle so exactly one video flips, even when a page and an
    embed both contain players. A frame whose theater is already active
    always wins, guaranteeing clean off-toggles.
-4. **Stacking-context rescue** — after activation, the script samples the
-   theater host with `elementFromPoint()`; if an ancestor stacking context
-   (transform/filter/…) is burying it, the host is temporarily re-parented to
-   `<html>` (playback survives DOM moves) and put back exactly where it was on
-   exit.
+4. **Self-healing rescue ladder** — after activation, the script samples the
+   theater host with `elementFromPoint()` every frame and escalates if it's
+   buried (ancestor stacking contexts / fixed-containing-block traps):
+   ① popover **top layer** (`showPopover()`, escapes all stacking contexts
+   *without* moving the element — site CSS/JS keep working), ② re-parent to
+   `<html>`, ③ downgrade to bare-`<video>` theater, ④ clean abort. It also
+   verifies the video itself isn't collapsed (black-host check).
 5. **Cross-frame Escape** — if the focused frame has no local theater,
    `Esc` is forwarded through the background page so a theater inside another
    frame still closes.

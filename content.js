@@ -443,6 +443,8 @@
     let guard = 0;
     while (el && guard++ < 6 && el !== document.body && el !== document.documentElement) {
       const er = el.getBoundingClientRect();
+      // display:contents / hidden ancestors have no box to theater.
+      if (er.width === 0 || er.height === 0) break;
       const hr = host.getBoundingClientRect();
       if (er.width > Math.max(hr.width * 1.3, hr.width + 80)) break;
       if (er.height > Math.max(hr.height * 1.45, hr.height + 140)) break;
@@ -467,12 +469,13 @@
       cssText:      host.style.cssText,        // snapshot of inline styles
       hadStyleAttr: host.hasAttribute('style'),
       tabindex:     host.getAttribute('tabindex'),
+      popoverAttr:  host.getAttribute('popover'),
       parent:       host.parentNode,
       nextSibling:  host.nextSibling,
       controls:     video.controls,
     };
 
-    theater = { video, host, saved, reparented: false };
+    theater = { video, host, saved, reparented: false, usedPopover: false, buttonPopover: false };
 
     // A bare video theaters itself; a container keeps its own controls.
     if (host === video) video.classList.add(CLS.videoActive);
@@ -512,8 +515,24 @@
 
   function exitTheater() {
     if (!theater) return;
-    const { video, host, saved, reparented } = theater;
+    const { video, host, saved, reparented, usedPopover, buttonPopover } = theater;
     theater = null;
+
+    // Undo the top-layer popover first (if the rescue ladder used it).
+    if (usedPopover) {
+      try { if (host.matches(':popover-open')) host.hidePopover(); } catch { /* ignore */ }
+      try {
+        if (saved.popoverAttr === null) host.removeAttribute('popover');
+        else host.setAttribute('popover', saved.popoverAttr);
+      } catch { /* ignore */ }
+    }
+    if (buttonPopover) {
+      const ui = tracked.get(video);
+      if (ui) {
+        try { if (ui.button.matches(':popover-open')) ui.button.hidePopover(); } catch { /* ignore */ }
+        ui.button.removeAttribute('popover');
+      }
+    }
 
     host.classList.remove(CLS.hostActive);
     video.classList.remove(CLS.videoActive, CLS.videoFill);
@@ -551,31 +570,78 @@
   }
 
   /**
-   * Sample the central region of the theater HOST with
-   * elementFromPoint(); if something else paints above it, the host is
-   * trapped inside an ancestor stacking context → reparent it to
-   * <html>, which escapes ALL ancestor contexts. Playback continues
-   * across DOM moves; the original position is restored on exit.
+   * Self-healing rescue ladder. Ancestor stacking contexts / fixed
+   * containing blocks (transform, filter, …) can bury or displace the
+   * theater host. Each animation frame we verify and escalate:
+   *
+   *   0  settle, recheck
+   *   1  popover "top layer" — escapes ALL stacking contexts WITHOUT
+   *      moving the element, so site CSS/JS keep working (least damage)
+   *   2  reparent the host to <html> (escapes ancestor traps by moving)
+   *   3  host-container mode still not rendering → downgrade to
+   *      bare-video theater (the classic mode)
+   *   4  even that failed → restore the page instead of trapping it dark
    */
   function ensurePaintedOnTop(attempt) {
-    if (!theater || !theater.host.isConnected) return;
+    if (!theater) return;
+    const { host, video } = theater;
+    if (!host.isConnected || !video.isConnected) return;
 
-    if (paintsAbovePage(theater.host)) return;
+    if (looksGood(host, video)) return;
 
     if (attempt === 0) {
-      // Ancestors may still be animating into place — check once more.
       requestAnimationFrame(() => ensurePaintedOnTop(1));
       return;
     }
 
-    try {
-      document.documentElement.appendChild(theater.host);
-      theater.reparented = true;
-      // Equal z-index → later DOM order paints on top, so re-append our
-      // widgets to stay above the host.
-      if (overlay) document.documentElement.appendChild(overlay);
-      for (const [, ui] of tracked) document.documentElement.appendChild(ui.button);
-    } catch { /* extremely unlikely; theater still works, maybe under a header */ }
+    if (attempt === 1 && !theater.usedPopover && typeof host.showPopover === 'function') {
+      try {
+        if (!host.hasAttribute('popover')) host.popover = 'manual';
+        host.showPopover();
+        theater.usedPopover = true;
+        // The exit button must beat the host's top layer too.
+        const ui = tracked.get(video);
+        if (ui && !ui.button.hasAttribute('popover')) {
+          ui.button.popover = 'manual';
+          ui.button.showPopover();
+          theater.buttonPopover = true;
+        }
+      } catch { /* fall through to the reparent stage */ }
+      requestAnimationFrame(() => ensurePaintedOnTop(2));
+      return;
+    }
+
+    if (attempt <= 2 && !theater.reparented) {
+      try {
+        document.documentElement.appendChild(host);
+        theater.reparented = true;
+        // Equal z-index → later DOM order paints on top, so re-append our
+        // widgets to stay above the host.
+        if (overlay) document.documentElement.appendChild(overlay);
+        for (const [, ui] of tracked) document.documentElement.appendChild(ui.button);
+      } catch { /* fall through */ }
+      requestAnimationFrame(() => ensurePaintedOnTop(3));
+      return;
+    }
+
+    if (host !== video) {
+      const v = video;
+      exitTheater();
+      enterTheater(v, v); // bare-video mode; its own ladder starts fresh
+      return;
+    }
+
+    exitTheater(); // last resort: leave the page as we found it
+  }
+
+  /** Host actually visible AND (in container mode) the video not collapsed. */
+  function looksGood(host, video) {
+    if (!paintsAbovePage(host)) return false;
+    if (host !== video) {
+      const vr = video.getBoundingClientRect();
+      if (vr.width < 40 || vr.height < 40) return false; // black host, dead video
+    }
+    return true;
   }
 
   function paintsAbovePage(host) {
