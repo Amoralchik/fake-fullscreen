@@ -30,7 +30,9 @@
 
   /** CSS class names (see content.css). */
   const CLS = {
-    videoActive:  'ffs-video--theater',
+    videoActive:  'ffs-video--theater',  // theater on the bare <video> itself
+    hostActive:   'ffs-theater-host',    // theater on a player CONTAINER
+    videoFill:    'ffs-video--fill',     // <video> inside a container host
     btn:          'ffs-btn',
     btnVisible:   'ffs-btn--visible',
     btnActive:    'ffs-btn--active',
@@ -151,19 +153,96 @@
   /* ----------------------------------------------------------------
    * Native-fullscreen interception
    *
-   * The actual prototype patch lives in injected.js (page world); the
-   * DOM is shared between worlds, so we talk to it through a plain
-   * attribute: data-ffs-prevent="1" | "0" on <html>.
+   * The patch must run in the PAGE's JavaScript world. Two routes:
+   *
+   *   1. PRIMARY — Firefox Xray waivers: content scripts can modify the
+   *      page's own objects via window.wrappedJSObject + exportFunction.
+   *      No <script> tag, so strict Content-Security-Policy (YouTube!)
+   *      cannot block it. That CSP block was the root cause of bug #1:
+   *      the patch never installed, so F presses hit real fullscreen.
+   *
+   *   2. FALLBACK — classic <script src="…/injected.js"> injection for
+   *      runtimes without the waiver APIs (kept in injected.js).
+   *
+   * Either way the patch reads two plain DOM attributes on <html> (the
+   * DOM is shared between worlds):
+   *   data-ffs-prevent="1"  → interception is enabled (settings + site)
+   *   data-ffs-theater="1"  → a theater session is live → press = EXIT
    * -------------------------------------------------------------- */
 
-  /** Inject the page-world patch as early as possible (document_start). */
+  function installInterception() {
+    if (!patchViaXray()) injectPageScript();
+  }
+
+  function pageFlag(name) {
+    try { return document.documentElement.dataset[name] === '1'; } catch { return false; }
+  }
+
+  function dispatchTheaterEvent(el) {
+    el.dispatchEvent(new CustomEvent('ffs:request-theater', { bubbles: true, composed: true }));
+  }
+
+  /** "Looks like a player": video ≥45% of the fullscreen target's area. */
+  function looksLikePlayer(el, video) {
+    try {
+      const vr = video.getBoundingClientRect();
+      const er = el.getBoundingClientRect();
+      if (vr.width < 100 || vr.height < 60) return false;
+      return (vr.width * vr.height) >= 0.45 * Math.max(1, er.width * er.height);
+    } catch { return true; }
+  }
+
+  function patchViaXray() {
+    try {
+      const pageWin = window.wrappedJSObject;
+      if (!pageWin || typeof exportFunction !== 'function') return false;
+      const proto = pageWin.Element && pageWin.Element.prototype;
+      if (!proto) return false;
+      if (proto.ffsPatched) return true; // already patched in this frame
+
+      const okPromise = () => pageWin.Promise.resolve();
+
+      const makePatched = (original) => exportFunction(function patchedRequestFullscreen(options) {
+        // Body executes with content-script scope; `this` is the page element.
+        if (pageFlag('ffsPrevent')) {
+          // Theater already open → this press means "exit"; the content
+          // script owns that decision.
+          if (pageFlag('ffsTheater')) {
+            dispatchTheaterEvent(this);
+            return okPromise();
+          }
+          const video = this.tagName === 'VIDEO'
+            ? this
+            : (typeof this.querySelector === 'function' ? this.querySelector('video') : null);
+          if (video && looksLikePlayer(this, video)) {
+            dispatchTheaterEvent(this);
+            return okPromise();
+          }
+        }
+        return Reflect.apply(original, this, [options]);
+      }, pageWin);
+
+      if (typeof proto.requestFullscreen === 'function') {
+        proto.requestFullscreen = makePatched(proto.requestFullscreen);
+      }
+      if (typeof proto.webkitRequestFullscreen === 'function') {
+        proto.webkitRequestFullscreen = makePatched(proto.webkitRequestFullscreen);
+      }
+      proto.ffsPatched = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Fallback: inject the page-world patch file (blocked by strict CSP). */
   function injectPageScript() {
     try {
       const s = document.createElement('script');
       s.src = browser.runtime.getURL('injected.js');
       s.onload = () => s.remove(); // patch is installed; tag not needed anymore
       (document.head || document.documentElement).appendChild(s);
-    } catch { /* CSP-blocked pages: the fullscreenchange fallback still works */ }
+    } catch { /* fullscreenchange safety net still applies */ }
   }
 
   /** Reflect the current effective setting onto <html data-ffs-prevent>. */
@@ -199,8 +278,8 @@
     for (const video of [...tracked.keys()]) {
       if (!video.isConnected && !(theater && theater.video === video)) untrack(video);
     }
-    // If the active video was ripped out mid-theater → exit gracefully.
-    if (theater && !theater.video.isConnected) exitTheater();
+    // If the active video/host was ripped out mid-theater → exit gracefully.
+    if (theater && (!theater.host.isConnected || !theater.video.isConnected)) exitTheater();
 
     const found = deep
       ? videosDeep(document)
@@ -350,33 +429,63 @@
     else enterTheater(video);
   }
 
-  function enterTheater(video) {
+  /**
+   * Climb from the <video> through same-size wrappers to the outermost
+   * "player" container. Custom players (YouTube, Vimeo, …) keep their
+   * control bars INSIDE that container — theatering the container keeps
+   * the site's own UI visible and clickable in theater mode (bug #2).
+   * We stop climbing as soon as an ancestor is meaningfully bigger:
+   * that's page layout, not the player.
+   */
+  function findPlayerHost(video) {
+    let host = video;
+    let el = video.parentElement;
+    let guard = 0;
+    while (el && guard++ < 6 && el !== document.body && el !== document.documentElement) {
+      const er = el.getBoundingClientRect();
+      const hr = host.getBoundingClientRect();
+      if (er.width > Math.max(hr.width * 1.3, hr.width + 80)) break;
+      if (er.height > Math.max(hr.height * 1.45, hr.height + 140)) break;
+      host = el;
+      el = el.parentElement;
+    }
+    return host;
+  }
+
+  /**
+   * @param {HTMLVideoElement} video  the video to theater
+   * @param {Element} [host]  element to elevate — the fullscreen request
+   *   target when redirected (authoritative), else the climb-up heuristic
+   */
+  function enterTheater(video, host) {
     if (!video || !video.isConnected) return;
     if (theater) exitTheater(); // switching videos restores the old one first
 
+    if (!(host instanceof Element) || !host.contains(video)) host = findPlayerHost(video);
+
     const saved = {
-      cssText:       video.style.cssText,      // snapshot of inline styles
-      hadStyleAttr:  video.hasAttribute('style'),
-      controls:      video.controls,
-      tabindex:      video.getAttribute('tabindex'),
-      parent:        video.parentNode,
-      nextSibling:   video.nextSibling,
+      cssText:      host.style.cssText,        // snapshot of inline styles
+      hadStyleAttr: host.hasAttribute('style'),
+      tabindex:     host.getAttribute('tabindex'),
+      parent:       host.parentNode,
+      nextSibling:  host.nextSibling,
+      controls:     video.controls,
     };
 
-    theater = { video, saved, reparented: false };
+    theater = { video, host, saved, reparented: false };
 
-    // The class does the heavy lifting (see content.css).
-    video.classList.add(CLS.videoActive);
+    // A bare video theaters itself; a container keeps its own controls.
+    if (host === video) video.classList.add(CLS.videoActive);
+    else { host.classList.add(CLS.hostActive); video.classList.add(CLS.videoFill); }
 
-    // Tell injected.js a theater session is live in this frame — even if
-    // the video later gets re-parented out of its player container, a
-    // second fullscreen press must still find us and EXIT (bug #1).
+    // Tell the page-world patch a theater session is live in this frame —
+    // a second fullscreen press must find us and EXIT (bug #1).
     try { document.documentElement.dataset.ffsTheater = '1'; } catch { /* ignore */ }
 
     if (settings.hideNativeControls) {
       try { video.controls = false; } catch { /* some players guard it */ }
       // Many players re-add the `controls` attribute on play / hover /
-      // loadedmetadata — keep it stripped for the whole session (bug #2).
+      // loadedmetadata — keep it stripped for the whole session.
       controlsGuard = new MutationObserver(() => {
         if (video.controls) { try { video.controls = false; } catch { /* ignore */ } }
       });
@@ -386,8 +495,8 @@
     // Let the user drive the player with the keyboard (space / arrows / etc.)
     // while it's the focus of the theater view.
     try {
-      video.setAttribute('tabindex', '-1');
-      video.focus({ preventScroll: true });
+      host.setAttribute('tabindex', '-1');
+      host.focus({ preventScroll: true });
     } catch { /* some players disallow programmatic focus */ }
 
     if (overlay) overlay.classList.add(CLS.overlayShown);
@@ -403,10 +512,11 @@
 
   function exitTheater() {
     if (!theater) return;
-    const { video, saved, reparented } = theater;
+    const { video, host, saved, reparented } = theater;
     theater = null;
 
-    video.classList.remove(CLS.videoActive);
+    host.classList.remove(CLS.hostActive);
+    video.classList.remove(CLS.videoActive, CLS.videoFill);
 
     try { delete document.documentElement.dataset.ffsTheater; } catch { /* ignore */ }
 
@@ -415,22 +525,22 @@
 
     // Restore the tabindex we may have set for keyboard control.
     try {
-      if (saved.tabindex === null) video.removeAttribute('tabindex');
-      else video.setAttribute('tabindex', saved.tabindex);
+      if (saved.tabindex === null) host.removeAttribute('tabindex');
+      else host.setAttribute('tabindex', saved.tabindex);
     } catch { /* ignore */ }
 
     // Restore exactly what was there before (inline styles only — we
     // never touch stylesheets, so author CSS is untouched).
     try {
-      if (saved.hadStyleAttr) video.style.cssText = saved.cssText;
-      else { video.style.cssText = ''; video.removeAttribute('style'); }
+      if (saved.hadStyleAttr) host.style.cssText = saved.cssText;
+      else { host.style.cssText = ''; host.removeAttribute('style'); }
     } catch { /* ignore */ }
 
     if (reparented) {
       if (saved.parent && saved.parent.isConnected) {
-        try { saved.parent.insertBefore(video, saved.nextSibling); } catch { /* detached */ }
-      } else if (!video.isConnected) {
-        video.remove(); // orphaned by an SPA navigation — drop it quietly
+        try { saved.parent.insertBefore(host, saved.nextSibling); } catch { /* detached */ }
+      } else if (!host.isConnected) {
+        host.remove(); // orphaned by an SPA navigation — drop it quietly
       }
     }
 
@@ -441,16 +551,16 @@
   }
 
   /**
-   * Sample the central region of the active video with
-   * elementFromPoint(); if something else paints above it, the video is
+   * Sample the central region of the theater HOST with
+   * elementFromPoint(); if something else paints above it, the host is
    * trapped inside an ancestor stacking context → reparent it to
    * <html>, which escapes ALL ancestor contexts. Playback continues
    * across DOM moves; the original position is restored on exit.
    */
   function ensurePaintedOnTop(attempt) {
-    if (!theater || !theater.video.isConnected) return;
+    if (!theater || !theater.host.isConnected) return;
 
-    if (paintsAbovePage(theater.video)) return;
+    if (paintsAbovePage(theater.host)) return;
 
     if (attempt === 0) {
       // Ancestors may still be animating into place — check once more.
@@ -459,17 +569,17 @@
     }
 
     try {
-      document.documentElement.appendChild(theater.video);
+      document.documentElement.appendChild(theater.host);
       theater.reparented = true;
       // Equal z-index → later DOM order paints on top, so re-append our
-      // widgets to stay above the video.
+      // widgets to stay above the host.
       if (overlay) document.documentElement.appendChild(overlay);
       for (const [, ui] of tracked) document.documentElement.appendChild(ui.button);
     } catch { /* extremely unlikely; theater still works, maybe under a header */ }
   }
 
-  function paintsAbovePage(video) {
-    const r = video.getBoundingClientRect();
+  function paintsAbovePage(host) {
+    const r = host.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
     const fractions = [0.3, 0.5, 0.7];
     let hits = 0;
@@ -481,7 +591,7 @@
           r.left + r.width * fx,
           r.top + r.height * fy
         );
-        if (el && (el === video || video.contains(el))) hits++;
+        if (el && (el === host || host.contains(el))) hits++;
       }
     }
     return hits >= Math.ceil(total * 0.75); // tolerate letterbox overlays etc.
@@ -545,11 +655,11 @@
     }
   }, true);
 
-  // Double-click on the theater video exits (like native players).
+  // Double-click on the theater host exits (like native players).
   document.addEventListener('dblclick', (e) => {
     if (!theater) return;
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
-    if (path.includes(theater.video)) {
+    if (path.includes(theater.host)) {
       e.preventDefault();
       e.stopPropagation();
       exitTheater();
@@ -568,14 +678,23 @@
   document.addEventListener('ffs:request-theater', (e) => {
     if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
     // A fullscreen press while theater is open means "exit" (bug #1) —
-    // works even if the video was re-parented out of its player container.
+    // works even if the host was re-parented out of its original place.
     if (theater) { exitTheater(); return; }
+
+    // e.target is the element fullscreen was requested on — the player
+    // CONTAINER for custom players (its own controls stay usable), or
+    // the <video> itself for native ones. That target is authoritative.
     const target = e.target instanceof Element ? e.target : null;
-    const video = target
-      ? (target instanceof HTMLVideoElement ? target : target.querySelector('video'))
-      : null;
-    const candidate = video || bestCandidate();
-    if (candidate) enterTheater(candidate);
+    let video = null;
+    let host = null;
+    if (target instanceof HTMLVideoElement) {
+      video = host = target;
+    } else if (target) {
+      video = target.querySelector('video');
+      if (video) host = target;
+    }
+    if (!video) video = bestCandidate();
+    if (video) enterTheater(video, host);
   }, true);
 
   /**
@@ -596,7 +715,8 @@
 
     try { document.exitFullscreen(); } catch { /* ignore */ }
     if (theater) exitTheater();
-    else if (video) enterTheater(video);
+    // The fullscreen target doubles as the theater host (player container).
+    else if (video) enterTheater(video, el instanceof HTMLVideoElement ? null : el);
   }, true);
 
   /* ================================================================
@@ -691,8 +811,8 @@
    * ================================================================ */
 
   // 1. Page-world patch must exist before any page script caches the
-  //    original requestFullscreen — inject immediately (document_start).
-  injectPageScript();
+  //    original requestFullscreen — install immediately (document_start).
+  installInterception();
 
   // 2. Load settings, then flag interception on <html data-ffs-prevent>.
   loadSettings().then(syncPreventFlag).catch(noopCatch);

@@ -67,16 +67,25 @@
 }
 
 /* While its video is in theater mode the button becomes the (subtle)
-   exit control: icon only, muted, low-contrast — not a red beacon. */
+   exit control: icon only, muted, low-contrast — not a red beacon.
+   IMPORTANT: opacity lives ONLY on the --visible+--active combo below;
+   if --active itself set opacity, the exit icon would still paint when
+   the user turned floating buttons off (that was bug #3). */
 .ffs-btn--active {
   background: rgb(17 17 24 / 0.6) !important;
   border-color: rgb(255 255 255 / 0.1) !important;
   padding: 6px !important; /* tighter → just fits the icon */
+}
+
+.ffs-btn--visible.ffs-btn--active {
   opacity: 0.8;
 }
 
 .ffs-btn--active:hover {
   background: rgb(34 34 44 / 0.75) !important;
+}
+
+.ffs-btn--visible.ffs-btn--active:hover {
   opacity: 1;
 }
 
@@ -133,6 +142,41 @@ video.ffs-video--theater {
   outline: none !important;
   visibility: visible !important;
   opacity: 1 !important;
+}
+
+/* ---------------------------------------------------------------
+ * Theater applied to a PLAYER CONTAINER instead of the bare video.
+ * Custom players (YouTube, Vimeo, …) keep their controls bar etc.
+ * inside the container, so this keeps the site's own UI visible and
+ * clickable in theater mode (that was bug #2).
+ * --------------------------------------------------------------- */
+.ffs-theater-host {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  transform: none !important;
+  filter: none !important;
+  z-index: 2147483647 !important;
+  background: #000 !important;
+  outline: none !important;
+}
+
+/* The <video> inside a theater host: fill the host, letterboxed. */
+video.ffs-video--fill {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  object-fit: contain !important;
+  background: #000 !important;
 }
 
 /* ---------------------------------------------------------------

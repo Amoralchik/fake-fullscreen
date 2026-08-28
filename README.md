@@ -59,12 +59,15 @@ the page behind dims to black, scrolling is locked (with scrollbar-width
 compensation so nothing jumps), and your original inline styles are restored
 on exit.
 
-**Player controls stay in your hands.** Native video controls are kept on by
-default (the *“Hide native controls”* option can turn them off), and on
-entering theater the video is focused so keyboard shortcuts work too —
-<kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> seek, <kbd>↑</kbd>/<kbd>↓</kbd>
-volume. The exit control is intentionally a small, low-contrast icon (no red
-beacon, no text) so it stays out of the way.
+**Player controls stay in your hands.** Theater mode elevates the whole
+*player container* — not just the bare `<video>` — so custom player UIs
+(YouTube's seek bar, Vimeo's controls, …) stay visible and clickable. For
+bare videos, native controls are kept on by default (the *“Hide native
+controls”* option can strip them, and a guard keeps them stripped even if
+the site re-adds the attribute). The player is focused on entry so keyboard
+shortcuts work too — <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd>
+seek, <kbd>↑</kbd>/<kbd>↓</kbd> volume. The exit control is intentionally a
+small, low-contrast icon so it stays out of the way.
 
 ## Options
 
@@ -82,15 +85,19 @@ to `storage.local`). Changes apply to open tabs immediately.
 
 ## How it works
 
-1. **Fullscreen interception** — `injected.js` runs in the *page's* JS world
-   (content scripts can't patch page prototypes) and wraps
-   `Element.prototype.requestFullscreen`. When the content script has set
-   `<html data-ffs-prevent="1">` and the request target is a video — or a
+1. **Fullscreen interception** — the content script patches
+   `Element.prototype.requestFullscreen` *in the page's own JS world* using
+   Firefox's Xray waiver APIs (`window.wrappedJSObject` + `exportFunction`),
+   so no `<script>` tag is needed and strict CSP (YouTube, …) can't block it
+   (the classic `injected.js` script-tag patch remains as a fallback). When
+   `data-ffs-prevent="1"` is set and the request target is a video — or a
    container that is *mostly* video (≥45% area, so full-page fullscreen of
    slideshows etc. is left alone) — the call is swallowed and a bubbling
    `ffs:request-theater` event is dispatched instead; `content.js` toggles
-   theater mode. A `fullscreenchange` listener catches anything the patch
-   misses and reroutes it.
+   theater mode on the **request target** (the player container, controls
+   included). While a theater is live (`data-ffs-theater="1"`), the next
+   fullscreen press exits instead. A `fullscreenchange` listener catches
+   anything the patch misses and reroutes it.
 2. **Detection** — each frame scans for `<video>` elements *recursively
    through open Shadow DOM roots*, then keeps watching with a
    `MutationObserver` (SPA navigations, lazy-loaded players) plus a cheap
@@ -103,8 +110,8 @@ to `storage.local`). Changes apply to open tabs immediately.
    embed both contain players. A frame whose theater is already active
    always wins, guaranteeing clean off-toggles.
 4. **Stacking-context rescue** — after activation, the script samples the
-   video area with `elementFromPoint()`; if an ancestor stacking context
-   (transform/filter/…) is burying it, the video is temporarily re-parented to
+   theater host with `elementFromPoint()`; if an ancestor stacking context
+   (transform/filter/…) is burying it, the host is temporarily re-parented to
    `<html>` (playback survives DOM moves) and put back exactly where it was on
    exit.
 5. **Cross-frame Escape** — if the focused frame has no local theater,
@@ -121,8 +128,8 @@ to `storage.local`). Changes apply to open tabs immediately.
   whole tab (frames can't escape their own document).
 - A site that caches `Element.prototype.requestFullscreen` before our patch
   loads bypasses the redirect (the `fullscreenchange` safety net usually
-  still catches it). Pages with a strict CSP that blocks extension script
-  injection fall back to the safety net too.
+  still catches it). If even the waiver patch is unavailable, the script-tag
+  fallback can be blocked by strict CSP — the safety net is the last resort.
 - <kbd>F11</kbd> (browser window fullscreen) is browser UI, not the
   Fullscreen API — intentionally untouched.
 - DRM videos (Netflix etc.) work visually like any other `<video>`, but those
@@ -146,7 +153,7 @@ to `storage.local`). Changes apply to open tabs immediately.
 From inside the `fake-fullscreen/` folder:
 
 ```sh
-zip -r ../fake-fullscreen-1.1.0.zip \
+zip -r ../fake-fullscreen-1.2.0.zip \
     manifest.json popup.html popup.js injected.js \
     content.js content.css background.js \
     options.html options.js icons README.md
@@ -160,8 +167,9 @@ contain `manifest.json` directly.
 
 - [ ] Control panel: toolbar icon → master switch pauses/resumes everywhere;
       site chip shows the current host and its effective On/Off.
-- [ ] YouTube: press <kbd>F</kbd> / click fullscreen → theater mode opens,
-      no OS fullscreen; press again → exits.
+- [ ] YouTube: press <kbd>F</kbd> / click fullscreen → theater opens with the
+      seek bar & controls still usable; press <kbd>F</kbd> again → exits
+      (never real OS fullscreen).
 - [ ] Redirect off in panel → native fullscreen works normally again.
 - [ ] Full-page fullscreen (e.g. a presentation site) is NOT hijacked even
       with a stray video on the page.
