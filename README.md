@@ -171,5 +171,7 @@ contain `manifest.json` directly.
 - [ ] Embedded iframe player: toggles from within the frame; Esc works.
 - [ ] Controls: in theater, <kbd>Space</kbd>/arrows drive the player; the
       exit control is just a subtle icon.
+- [ ] Floating button OFF in the panel → no buttons at all (exit via
+      <kbd>Esc</kbd> / double-click / fullscreen key).
 - [ ] Options: add a per-site rule (On/Off) → state updates live on that
       site; darkness slider updates live.

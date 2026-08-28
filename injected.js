@@ -43,6 +43,20 @@
     }
   }
 
+  /**
+   * Set by content.js while a theater session is live in this frame.
+   * Needed because the theater video may be RE-PARENTED out of its
+   * player container — then a second fullscreen press finds no <video>
+   * inside the container and would otherwise slip into real fullscreen.
+   */
+  function theaterActive() {
+    try {
+      return document.documentElement.dataset.ffsTheater === '1';
+    } catch {
+      return false;
+    }
+  }
+
   function findVideoIn(el) {
     if (el instanceof HTMLVideoElement) return el;
     if (el && typeof el.querySelector === 'function') {
@@ -66,24 +80,36 @@
   function hijack(el) {
     const video = findVideoIn(el);
     if (!video || !looksLikePlayer(el, video)) return false;
+    dispatchTheaterRequest(el);
+    return true;
+  }
+
+  const proto = Element.prototype;
+
+  const dispatchTheaterRequest = (el) => {
     el.dispatchEvent(
       new CustomEvent('ffs:request-theater', {
         bubbles: true,
         composed: true, // cross open shadow boundaries on the way up
       })
     );
-    return true;
-  }
-
-  const proto = Element.prototype;
+  };
 
   for (const name of ['requestFullscreen', 'webkitRequestFullscreen']) {
     const original = proto[name];
     if (typeof original !== 'function') continue;
 
     proto[name] = function patchedRequestFullscreen(options) {
-      if (interceptionEnabled() && hijack(this)) {
-        return Promise.resolve(); // pretend fullscreen succeeded
+      if (interceptionEnabled()) {
+        // Theater already open → this press means "exit"; let the
+        // content script handle it (it owns the theater state).
+        if (theaterActive()) {
+          dispatchTheaterRequest(this);
+          return Promise.resolve();
+        }
+        if (hijack(this)) {
+          return Promise.resolve(); // pretend fullscreen succeeded
+        }
       }
       return original.call(this, options);
     };

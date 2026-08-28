@@ -84,6 +84,7 @@
 
   let overlay = null;
   let scrollSave = null;
+  let controlsGuard = null; // MutationObserver keeping native controls stripped
   const mouse = { x: -1, y: -1 };
 
   /* ================================================================
@@ -298,7 +299,9 @@
 
       let show = false;
       if (isActive) {
-        show = true;
+        // The floating-button toggle also hides the exit icon (bug #3) —
+        // Esc / double-click / overlay click / fullscreen-key remain.
+        show = settings.buttonEnabled;
       } else if (
         extensionActiveHere() &&
         settings.buttonEnabled &&
@@ -364,8 +367,20 @@
 
     // The class does the heavy lifting (see content.css).
     video.classList.add(CLS.videoActive);
+
+    // Tell injected.js a theater session is live in this frame — even if
+    // the video later gets re-parented out of its player container, a
+    // second fullscreen press must still find us and EXIT (bug #1).
+    try { document.documentElement.dataset.ffsTheater = '1'; } catch { /* ignore */ }
+
     if (settings.hideNativeControls) {
       try { video.controls = false; } catch { /* some players guard it */ }
+      // Many players re-add the `controls` attribute on play / hover /
+      // loadedmetadata — keep it stripped for the whole session (bug #2).
+      controlsGuard = new MutationObserver(() => {
+        if (video.controls) { try { video.controls = false; } catch { /* ignore */ } }
+      });
+      controlsGuard.observe(video, { attributes: true, attributeFilter: ['controls'] });
     }
 
     // Let the user drive the player with the keyboard (space / arrows / etc.)
@@ -393,6 +408,9 @@
 
     video.classList.remove(CLS.videoActive);
 
+    try { delete document.documentElement.dataset.ffsTheater; } catch { /* ignore */ }
+
+    if (controlsGuard) { controlsGuard.disconnect(); controlsGuard = null; }
     try { video.controls = saved.controls; } catch { /* ignore */ }
 
     // Restore the tabindex we may have set for keyboard control.
@@ -549,32 +567,36 @@
    * -------------------------------------------------------------- */
   document.addEventListener('ffs:request-theater', (e) => {
     if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
+    // A fullscreen press while theater is open means "exit" (bug #1) —
+    // works even if the video was re-parented out of its player container.
+    if (theater) { exitTheater(); return; }
     const target = e.target instanceof Element ? e.target : null;
     const video = target
       ? (target instanceof HTMLVideoElement ? target : target.querySelector('video'))
       : null;
-    toggleTheater(video || bestCandidate());
+    const candidate = video || bestCandidate();
+    if (candidate) enterTheater(candidate);
   }, true);
 
   /**
    * Safety net: if real fullscreen still slipped through (page cached
-   * the original method, CSP blocked injection, …), back out of it and
-   * reroute to theater mode instead.
+   * the original method, CSP blocked injection, …), back out of it.
+   * A fullscreen press while theater is open means "exit"; otherwise
+   * reroute into theater mode.
    */
   document.addEventListener('fullscreenchange', () => {
     if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
     const el = document.fullscreenElement;
     if (!el) return;
-    // Already handled this one (e.g. our own flow re-entered).
-    if (theater && (el === theater.video || el.contains(theater.video))) return;
 
     const video = el instanceof HTMLVideoElement
       ? el
       : (typeof el.querySelector === 'function' ? el.querySelector('video') : null);
-    if (!video) return; // full-page fullscreen of something else — not ours
+    if (!video && !theater) return; // full-page fullscreen of something else — not ours
 
     try { document.exitFullscreen(); } catch { /* ignore */ }
-    enterTheater(video);
+    if (theater) exitTheater();
+    else if (video) enterTheater(video);
   }, true);
 
   /* ================================================================
