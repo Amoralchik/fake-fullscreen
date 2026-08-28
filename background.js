@@ -143,7 +143,5 @@ browser.commands.onCommand.addListener((command) => {
   }
 });
 
-// Toolbar button click does the same thing as the shortcut.
-browser.action.onClicked.addListener(() => {
-  getActiveTabId().then(beginProbe);
-});
+// Note: the toolbar icon now opens the control panel (popup.html), so
+// browser.action.onClicked intentionally has no listener anymore.

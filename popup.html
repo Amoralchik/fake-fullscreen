@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fake Fullscreen</title>
+  <style>
+    /* Dark Reader-flavored control panel. Compact, dark, switch-driven. */
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 300px;
+      font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #e8e8ef;
+      background: #14141b;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 14px 16px 10px;
+    }
+    header .dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #4338ca);
+      box-shadow: 0 0 10px #6366f1aa;
+      flex: none;
+    }
+    header h1 { margin: 0; font-size: 15px; font-weight: 650; }
+    header .ver { margin-left: auto; color: #6f6f80; font-size: 11px; }
+
+    section { padding: 6px 16px; }
+    section + section { border-top: 1px solid rgb(255 255 255 / 0.06); }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+    }
+    .row .label { flex: 1; }
+    .row .label b { display: block; font-weight: 600; }
+    .row .label span { color: #9a9aac; font-size: 11.5px; }
+
+    .row.main .label b { font-size: 14px; }
+
+    /* Toggle switch */
+    .switch {
+      position: relative;
+      flex: none;
+      width: 38px;
+      height: 22px;
+    }
+    .switch input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      margin: 0;
+      cursor: pointer;
+    }
+    .switch .track {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgb(255 255 255 / 0.14);
+      transition: background 0.18s ease;
+      pointer-events: none;
+    }
+    .switch .knob {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #cfcfe0;
+      transition: transform 0.18s ease, background 0.18s ease;
+      pointer-events: none;
+    }
+    .switch input:checked + .track { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+    .switch input:checked ~ .knob { transform: translateX(16px); background: #fff; }
+    .switch input:focus-visible + .track { outline: 2px solid #9db4ff; outline-offset: 2px; }
+
+    .switch.big { width: 44px; height: 25px; }
+    .switch.big .knob { width: 19px; height: 19px; }
+    .switch.big input:checked ~ .knob { transform: translateX(19px); }
+
+    /* Per-site card */
+    .site .host {
+      display: inline-block;
+      max-width: 100%;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgb(99 102 241 / 0.12);
+      border: 1px solid rgb(99 102 241 / 0.3);
+      color: #b6b9d8;
+      font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .site.unavailable .host {
+      background: rgb(255 255 255 / 0.06);
+      border-color: rgb(255 255 255 / 0.1);
+      color: #6f6f80;
+    }
+
+    footer {
+      padding: 10px 16px 14px;
+      border-top: 1px solid rgb(255 255 255 / 0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    footer kbd {
+      font: 10.5px ui-monospace, Menlo, monospace;
+      background: #101017;
+      border: 1px solid rgb(255 255 255 / 0.16);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 0 5px;
+      color: #b6b9d8;
+    }
+    footer .hint { color: #6f6f80; font-size: 11px; flex: 1; }
+    footer button {
+      background: transparent;
+      border: 1px solid rgb(255 255 255 / 0.14);
+      color: #9a9aac;
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    footer button:hover { color: #fff; border-color: rgb(255 255 255 / 0.3); }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>Fake Fullscreen</h1>
+    <span class="ver">v1.1.0</span>
+  </header>
+
+  <!-- Master switch -->
+  <section>
+    <div class="row main">
+      <div class="label">
+        <b>Theater mode</b>
+        <span id="masterHint">Intercept &amp; restyle fullscreen</span>
+      </div>
+      <label class="switch big" title="Enable / disable the extension">
+        <input type="checkbox" id="masterEnabled" />
+        <span class="track"></span><span class="knob"></span>
+      </label>
+    </div>
+  </section>
+
+  <!-- Behavior -->
+  <section>
+    <div class="row">
+      <div class="label">
+        <b>Redirect fullscreen</b>
+        <span>Players' fullscreen button / F key opens theater mode instead</span>
+      </div>
+      <label class="switch" title="Redirect native fullscreen requests to theater mode">
+        <input type="checkbox" id="preventNativeFullscreen" />
+        <span class="track"></span><span class="knob"></span>
+      </label>
+    </div>
+
+    <div class="row">
+      <div class="label">
+        <b>Floating “Theater” button</b>
+        <span>Show the hover button on videos</span>
+      </div>
+      <label class="switch" title="Show the floating button on videos">
+        <input type="checkbox" id="buttonEnabled" />
+        <span class="track"></span><span class="knob"></span>
+      </label>
+    </div>
+  </section>
+
+  <!-- Per-site -->
+  <section class="site" id="siteSection">
+    <div class="row">
+      <div class="label">
+        <span class="host" id="siteHost">…</span>
+        <span id="siteHint">On this site</span>
+      </div>
+      <label class="switch" title="Toggle the extension for this site">
+        <input type="checkbox" id="siteEnabled" />
+        <span class="track"></span><span class="knob"></span>
+      </label>
+    </div>
+  </section>
+
+  <footer>
+    <span class="hint">Toggle video: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></span>
+    <button id="openOptions" type="button">Settings…</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

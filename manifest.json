@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Fake Fullscreen – Theater Mode",
-  "version": "1.0.0",
-  "description": "Put any HTML5 video into a borderless theater view that fills the whole tab — no OS-level fullscreen involved.",
+  "version": "1.1.0",
+  "description": "Put any HTML5 video into a borderless theater view that fills the whole tab — and redirect native fullscreen into it. No OS-level fullscreen involved.",
 
   "browser_specific_settings": {
     "gecko": {
@@ -25,7 +25,8 @@
   },
 
   "action": {
-    "default_title": "Toggle Fake Fullscreen (theater mode)",
+    "default_title": "Fake Fullscreen – open control panel",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png"
@@ -47,12 +48,19 @@
     "open_in_tab": true
   },
 
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "css": ["content.css"],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true
     }

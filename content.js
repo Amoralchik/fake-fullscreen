@@ -62,6 +62,7 @@
     masterEnabled:     true,   // global kill switch
     defaultEnabled:    true,   // sites with no rule are on/off by default
     siteRules:         [],     // [{ domain: 'example.com', enabled: true }]
+    preventNativeFullscreen: true, // redirect requestFullscreen → theater mode
     buttonEnabled:     true,   // show floating buttons on videos
     buttonHoverOnly:   true,   // only show them near the cursor
     hideNativeControls: false, // strip video.controls while in theater
@@ -146,8 +147,35 @@
     if (overlay) overlay.style.setProperty('--ffs-dim', String(settings.dimLevel));
   }
 
+  /* ----------------------------------------------------------------
+   * Native-fullscreen interception
+   *
+   * The actual prototype patch lives in injected.js (page world); the
+   * DOM is shared between worlds, so we talk to it through a plain
+   * attribute: data-ffs-prevent="1" | "0" on <html>.
+   * -------------------------------------------------------------- */
+
+  /** Inject the page-world patch as early as possible (document_start). */
+  function injectPageScript() {
+    try {
+      const s = document.createElement('script');
+      s.src = browser.runtime.getURL('injected.js');
+      s.onload = () => s.remove(); // patch is installed; tag not needed anymore
+      (document.head || document.documentElement).appendChild(s);
+    } catch { /* CSP-blocked pages: the fullscreenchange fallback still works */ }
+  }
+
+  /** Reflect the current effective setting onto <html data-ffs-prevent>. */
+  function syncPreventFlag() {
+    try {
+      document.documentElement.dataset.ffsPrevent =
+        settings.preventNativeFullscreen && extensionActiveHere() ? '1' : '0';
+    } catch { /* documentElement not ready yet — retried on next change */ }
+  }
+
   browser.storage.onChanged.addListener((_changes, _area) => {
     loadSettings().then(() => {
+      syncPreventFlag();
       if (!extensionActiveHere() && theater) exitTheater();
       schedulePositionUpdate();
     }).catch(noopCatch);
@@ -510,6 +538,45 @@
     }
   }, true);
 
+  /* ----------------------------------------------------------------
+   * Native fullscreen → theater redirect
+   *
+   * Primary path: injected.js (page world) swallows the
+   * requestFullscreen call and dispatches this bubbling DOM event.
+   * e.target is the element fullscreen was requested on (a <video> or
+   * its player container). We TOGGLE so a second fullscreen press
+   * (e.g. YouTube's F key) exits cleanly.
+   * -------------------------------------------------------------- */
+  document.addEventListener('ffs:request-theater', (e) => {
+    if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
+    const target = e.target instanceof Element ? e.target : null;
+    const video = target
+      ? (target instanceof HTMLVideoElement ? target : target.querySelector('video'))
+      : null;
+    toggleTheater(video || bestCandidate());
+  }, true);
+
+  /**
+   * Safety net: if real fullscreen still slipped through (page cached
+   * the original method, CSP blocked injection, …), back out of it and
+   * reroute to theater mode instead.
+   */
+  document.addEventListener('fullscreenchange', () => {
+    if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
+    const el = document.fullscreenElement;
+    if (!el) return;
+    // Already handled this one (e.g. our own flow re-entered).
+    if (theater && (el === theater.video || el.contains(theater.video))) return;
+
+    const video = el instanceof HTMLVideoElement
+      ? el
+      : (typeof el.querySelector === 'function' ? el.querySelector('video') : null);
+    if (!video) return; // full-page fullscreen of something else — not ours
+
+    try { document.exitFullscreen(); } catch { /* ignore */ }
+    enterTheater(video);
+  }, true);
+
   /* ================================================================
    * Messaging protocol with background.js
    *
@@ -517,7 +584,8 @@
    *   ffs:report      frame → bg    { requestId, score, active }
    *   ffs:toggle      bg → frame    "toggle your best video"
    *   ffs:force-exit  bg → frames   used for cross-frame Escape
-   *   ffs:state / esc-request           frame → bg
+   *   ffs:state / esc-request       frame → bg
+   *   ffs:site-info   popup → frame "what host is this page?" (top frame answers)
    * ================================================================ */
 
   /** Score = visible viewport share, boosted while playing / hovered. */
@@ -577,6 +645,18 @@
       case 'ffs:force-exit':
         if (theater) exitTheater();
         break;
+
+      // The popup asks the TOP frame which site this is and whether the
+      // extension is active here. Other frames stay silent so the popup
+      // always describes the page's own host.
+      case 'ffs:site-info': {
+        if (window.top !== window) return undefined;
+        return Promise.resolve({
+          hostname: currentHostname(),
+          active: extensionActiveHere(),
+          theaterActive: !!theater,
+        });
+      }
     }
   });
 
@@ -587,6 +667,13 @@
   /* ================================================================
    * Boot
    * ================================================================ */
+
+  // 1. Page-world patch must exist before any page script caches the
+  //    original requestFullscreen — inject immediately (document_start).
+  injectPageScript();
+
+  // 2. Load settings, then flag interception on <html data-ffs-prevent>.
+  loadSettings().then(syncPreventFlag).catch(noopCatch);
 
   // Cheap periodic sweep (shallow) between mutation-driven deep scans.
   setInterval(() => scan(false), 2500);

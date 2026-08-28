@@ -211,13 +211,19 @@
       <label class="row">
         <input type="checkbox" id="buttonEnabled" />
         <span class="row-text"><b>Show the floating “Theater” button on videos</b>
-          <span>You can still use the toolbar icon or keyboard shortcut.</span></span>
+          <span>You can still use the keyboard shortcut without it.</span></span>
       </label>
 
       <label class="row">
         <input type="checkbox" id="buttonHoverOnly" />
         <span class="row-text"><b>Only show the button while hovering a video</b>
           <span>Uncheck to keep buttons visible on every detected video.</span></span>
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="preventNativeFullscreen" />
+        <span class="row-text"><b>Redirect native fullscreen to theater mode</b>
+          <span>When a player goes fullscreen (button or key), open theater mode instead of OS fullscreen.</span></span>
       </label>
 
       <label class="row">

@@ -17,6 +17,7 @@ const DEFAULTS = {
   masterEnabled:     true,
   defaultEnabled:    true,
   siteRules:         [],
+  preventNativeFullscreen: true,
   buttonEnabled:     true,
   buttonHoverOnly:   true,
   hideNativeControls: false,
@@ -29,6 +30,7 @@ const $ = (id) => document.getElementById(id);
 const CHECKBOXES = [
   'masterEnabled',
   'defaultEnabled',
+  'preventNativeFullscreen',
   'buttonEnabled',
   'buttonHoverOnly',
   'hideNativeControls',
