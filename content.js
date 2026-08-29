@@ -41,15 +41,39 @@
     locked:       'ffs-scroll-locked',
   };
 
-  const ICON_EXPAND =
-    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
-    '<path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" fill="none" ' +
-    'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const PATH_EXPAND = 'M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4';
+  const PATH_COLLAPSE = 'M2 6h4V2M14 6h-4V2M2 10h4v4M14 10h-4v4';
 
-  const ICON_COLLAPSE =
-    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
-    '<path d="M2 6h4V2M14 6h-4V2M2 10h4v4M14 10h-4v4" fill="none" ' +
-    'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /** Build the expand/collapse SVG icon safely (no innerHTML — AMO linter). */
+  function makeIcon(pathD) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', pathD);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.7');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  /** Rebuild a theater button's content: active → icon only; inactive → icon + label. */
+  function renderButtonContent(button, isActive) {
+    button.replaceChildren();
+    button.appendChild(makeIcon(isActive ? PATH_COLLAPSE : PATH_EXPAND));
+    if (!isActive) {
+      const label = document.createElement('span');
+      label.textContent = 'Theater';
+      button.appendChild(label);
+    }
+  }
 
   /**
    * Default settings. Mirrored by options.js — keep both in sync.
@@ -320,7 +344,7 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = CLS.btn;
-    button.innerHTML = ICON_EXPAND + '<span>Theater</span>';
+    renderButtonContent(button, false);
     button.title = 'Fake Fullscreen — theater mode';
     button.setAttribute('aria-label', 'Toggle theater mode for this video');
 
@@ -413,7 +437,7 @@
       if (ui.lastActive !== isActive) {
         ui.lastActive = isActive;
         // Inactive → label + icon.  Active → icon only, muted (see CSS).
-        button.innerHTML = isActive ? ICON_COLLAPSE : ICON_EXPAND + '<span>Theater</span>';
+        renderButtonContent(button, isActive);
         button.title = isActive ? 'Exit fake fullscreen' : 'Fake Fullscreen — theater mode';
         button.setAttribute('aria-label', isActive ? 'Exit theater mode' : 'Toggle theater mode for this video');
       }
