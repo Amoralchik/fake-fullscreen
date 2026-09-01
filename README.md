@@ -20,7 +20,14 @@ fake-fullscreen/
 
 ---
 
-## Install (temporary load) in Zen or Firefox
+## Install
+
+**From the official store (recommended):** the extension is signed and
+published on [Mozilla Add-ons (AMO)](https://addons.mozilla.org/en-US/firefox/addon/fake-fullscreen-theater-mode/)
+— works in **Firefox** and **Zen Browser**. Click *Add to Firefox* and
+updates arrive automatically.
+
+### Manual (temporary load) — for development
 
 1. Open **`about:debugging#/runtime/this-firefox`** in the address bar.
 2. Click **“Load Temporary Add-on…”**
@@ -32,7 +39,9 @@ Notes:
 
 - Temporary add-ons are **removed when the browser fully restarts** — reload
   them the same way. This is the standard unsigned-extension workflow; Zen
-  behaves exactly like Firefox here.
+  behaves exactly like Firefox here. For everyday use, install the signed
+  build from [Mozilla Add-ons](https://addons.mozilla.org/en-US/firefox/addon/fake-fullscreen-theater-mode/)
+  instead.
 - To use it in Private Windows: `about:addons` → *Extensions* → Fake
   Fullscreen → **Run in Private Windows → Allow**.
 
