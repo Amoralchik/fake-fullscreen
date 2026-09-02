@@ -216,6 +216,21 @@
     } catch { return true; }
   }
 
+  /**
+   * Page-level elements must never become the theater host. YouTube
+   * fullscreens <html> (yes, the document element — its own fullscreen
+   * button calls documentElement.requestFullscreen()), and theatering
+   * html/body "works" in a nightmare way: the dark overlay is a CHILD of
+   * html, so it paints above the buried video, while every
+   * elementFromPoint sample still "hits" the host — the rescue ladder
+   * sees a perfectly painted theater and never promotes anything. The
+   * user gets a dimmed page and no video. Redirects from such targets
+   * fall back to findPlayerHost() instead (bug #5).
+   */
+  function isPageLevel(el) {
+    return el === document.documentElement || el === document.body;
+  }
+
   function patchViaXray() {
     try {
       const pageWin = window.wrappedJSObject;
@@ -454,28 +469,89 @@
   }
 
   /**
+   * Does el carry the site's own player chrome (control bar, title
+   * gradient, …) as direct children outside the video's subtree?
+   * That element IS the player root — the right thing to theater.
+   */
+  function hasPlayerChrome(el, video) {
+    for (const child of el.children) {
+      if (child === video || child.contains(video)) continue;
+      const r = child.getBoundingClientRect();
+      if (r.width >= 24 && r.height >= 8) return true;
+    }
+    return false;
+  }
+
+  /**
    * Climb from the <video> through same-size wrappers to the outermost
    * "player" container. Custom players (YouTube, Vimeo, …) keep their
    * control bars INSIDE that container — theatering the container keeps
    * the site's own UI visible and clickable in theater mode (bug #2).
    * We stop climbing as soon as an ancestor is meaningfully bigger:
-   * that's page layout, not the player.
+   * that's page layout, not the player — or as soon as an ancestor
+   * carries the site's own player chrome (that's the player root).
+   *
+   * Empty boxes are climbed THROUGH, not stopped at: players that
+   * absolutely position their <video> leave the direct wrapper with a
+   * zero box (YouTube's .html5-video-container is position:relative
+   * with height 0 because the video inside is out of flow). Stopping
+   * there used to strand the control bar on the dimmed page (bug #4).
    */
   function findPlayerHost(video) {
     let host = video;
     let el = video.parentElement;
-    let guard = 0;
-    while (el && guard++ < 6 && el !== document.body && el !== document.documentElement) {
+    let realSteps = 0;
+    let emptySteps = 0;
+    while (
+      el && realSteps < 8 && emptySteps < 8 &&
+      el !== document.body && el !== document.documentElement
+    ) {
       const er = el.getBoundingClientRect();
-      // display:contents / hidden ancestors have no box to theater.
-      if (er.width === 0 || er.height === 0) break;
+      // display:contents / hidden / empty shells have no box to theater.
+      if (er.width === 0 || er.height === 0) {
+        emptySteps++;
+        el = el.parentElement;
+        continue;
+      }
+      realSteps++;
       const hr = host.getBoundingClientRect();
       if (er.width > Math.max(hr.width * 1.3, hr.width + 80)) break;
       if (er.height > Math.max(hr.height * 1.45, hr.height + 140)) break;
       host = el;
+      if (hasPlayerChrome(el, video)) break;
       el = el.parentElement;
     }
     return host;
+  }
+
+  /**
+   * Companion to findPlayerHost: percentage sizing on the <video>
+   * resolves against its containing block, which is often one of those
+   * zero-sized shells. Inside a theatered container the video would
+   * collapse to height 0 (YouTube again — its inline width/height are
+   * overridden by .ffs-video--fill, and 100% of a 0-height shell is 0).
+   * Give every empty wrapper between video and host a 100% box;
+   * exitTheater undoes this exactly. Callers pass an array to collect
+   * the touched elements for restoration.
+   */
+  function stretchEmptyWrappers(video, host, out) {
+    let node = video.parentElement;
+    let guard = 0;
+    while (node && node !== host && guard++ < 8) {
+      const r = node.getBoundingClientRect();
+      const needW = r.width === 0;
+      const needH = r.height === 0;
+      if (needW || needH) {
+        out.push({
+          el: node,
+          hadStyleAttr: node.hasAttribute('style'),
+          cssText: node.style.cssText,
+        });
+        if (needW) node.style.setProperty('width', '100%', 'important');
+        if (needH) node.style.setProperty('height', '100%', 'important');
+      }
+      node = node.parentElement;
+    }
   }
 
   /**
@@ -499,11 +575,17 @@
       controls:     video.controls,
     };
 
-    theater = { video, host, saved, reparented: false, usedPopover: false, buttonPopover: false };
+    theater = { video, host, saved, reparented: false, usedPopover: false, buttonPopover: false, stretched: [] };
 
     // A bare video theaters itself; a container keeps its own controls.
     if (host === video) video.classList.add(CLS.videoActive);
-    else { host.classList.add(CLS.hostActive); video.classList.add(CLS.videoFill); }
+    else {
+      host.classList.add(CLS.hostActive);
+      video.classList.add(CLS.videoFill);
+      // The video must fill the elevated host — stretch any zero-sized
+      // shell it is wrapped in (percentage sizing resolves against it).
+      stretchEmptyWrappers(video, host, theater.stretched);
+    }
 
     // Tell the page-world patch a theater session is live in this frame —
     // a second fullscreen press must find us and EXIT (bug #1).
@@ -539,7 +621,7 @@
 
   function exitTheater() {
     if (!theater) return;
-    const { video, host, saved, reparented, usedPopover, buttonPopover } = theater;
+    const { video, host, saved, reparented, usedPopover, buttonPopover, stretched } = theater;
     theater = null;
 
     // Undo the top-layer popover first (if the rescue ladder used it).
@@ -578,6 +660,14 @@
       if (saved.hadStyleAttr) host.style.cssText = saved.cssText;
       else { host.style.cssText = ''; host.removeAttribute('style'); }
     } catch { /* ignore */ }
+
+    // Undo the empty-wrapper stretch (see stretchEmptyWrappers).
+    for (const st of stretched || []) {
+      try {
+        if (st.hadStyleAttr) st.el.style.cssText = st.cssText;
+        else { st.el.style.cssText = ''; st.el.removeAttribute('style'); }
+      } catch { /* ignore */ }
+    }
 
     if (reparented) {
       if (saved.parent && saved.parent.isConnected) {
@@ -671,20 +761,23 @@
   function paintsAbovePage(host) {
     const r = host.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
-    const fractions = [0.3, 0.5, 0.7];
-    let hits = 0;
-    let total = 0;
+    // 5×5 grid across the whole host, and EVERY sample must land inside
+    // it. A fixed z-max element has nothing legitimate painting above it
+    // — partial occlusion (site masthead, sidebar column, cookie bars…)
+    // is exactly the burial this ladder exists to escape. Tolerating a
+    // few misses used to leave e.g. YouTube's header visible on top of
+    // the theater while the check still reported "good".
+    const fractions = [0.1, 0.3, 0.5, 0.7, 0.9];
     for (const fx of fractions) {
       for (const fy of fractions) {
-        total++;
         const el = document.elementFromPoint(
           r.left + r.width * fx,
           r.top + r.height * fy
         );
-        if (el && (el === host || host.contains(el))) hits++;
+        if (!(el && (el === host || host.contains(el)))) return false;
       }
     }
-    return hits >= Math.ceil(total * 0.75); // tolerate letterbox overlays etc.
+    return true;
   }
 
   /* ----------------------------------------------------------------
@@ -773,16 +866,21 @@
 
     // e.target is the element fullscreen was requested on — the player
     // CONTAINER for custom players (its own controls stay usable), or
-    // the <video> itself for native ones. That target is authoritative.
+    // the <video> itself for native ones. That target is authoritative
+    // — except when it is page-level (html/body): YouTube fullscreens
+    // <html>, which must not be theatered (see isPageLevel). Then the
+    // climb-up heuristic picks the real player container instead.
     const target = e.target instanceof Element ? e.target : null;
     let video = null;
     let host = null;
     if (target instanceof HTMLVideoElement) {
       video = host = target;
-    } else if (target) {
+    } else if (target && !isPageLevel(target)) {
       video = target.querySelector('video');
       if (video) host = target;
     }
+    // Page-level target (or no video inside): score every tracked video
+    // and let the best one host the theater.
     if (!video) video = bestCandidate();
     if (video) enterTheater(video, host);
   }, true);
@@ -805,8 +903,15 @@
 
     try { document.exitFullscreen(); } catch { /* ignore */ }
     if (theater) exitTheater();
-    // The fullscreen target doubles as the theater host (player container).
-    else if (video) enterTheater(video, el instanceof HTMLVideoElement ? null : el);
+    // The fullscreen target doubles as the theater host (player container)
+    // — unless it is page-level (YouTube fullscreens <html>): then the
+    // climb-up heuristic picks the real player container instead.
+    else if (video) {
+      enterTheater(
+        video,
+        el instanceof Element && !isPageLevel(el) && !(el instanceof HTMLVideoElement) ? el : null
+      );
+    }
   }, true);
 
   /* ================================================================

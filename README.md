@@ -164,7 +164,7 @@ to `storage.local`). Changes apply to open tabs immediately.
 From inside the `fake-fullscreen/` folder:
 
 ```sh
-zip -r ../fake-fullscreen-1.2.0.zip \
+zip -r ../fake-fullscreen-1.2.2.zip \
     manifest.json popup.html popup.js injected.js \
     content.js content.css background.js \
     options.html options.js icons README.md
