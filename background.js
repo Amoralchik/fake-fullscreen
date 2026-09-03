@@ -120,6 +120,16 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       break;
     }
 
+    // Element-picker "iframe theater": a frame's <iframe> is theatered
+    // from its parent frame — every frame of the tab (embeds included)
+    // must stand down while that's live, and resume when it ends.
+    case 'ffs:iframe-theater': {
+      if (sender.tab) {
+        safeSend(sender.tab.id, { type: 'ffs:iframe-theater', active: !!msg.active });
+      }
+      break;
+    }
+
     // Per-tab badge feedback while a theater is up in this frame.
     case 'ffs:state': {
       const tabId = sender.tab ? sender.tab.id : null;

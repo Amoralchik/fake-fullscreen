@@ -105,6 +105,35 @@
       color: #6f6f80;
     }
 
+    /* Element-picker CTA */
+    .pick-btn {
+      width: 100%;
+      margin-top: 7px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgb(99 102 241 / 0.55);
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .pick-btn:hover:not(:disabled) { filter: brightness(1.15); }
+    .pick-btn:focus-visible { outline: 2px solid #9db4ff; outline-offset: 2px; }
+    .pick-btn:disabled {
+      background: rgb(255 255 255 / 0.06);
+      border-color: rgb(255 255 255 / 0.12);
+      color: #6f6f80;
+      cursor: default;
+    }
+    .pick-hint {
+      margin: 7px 1px 3px;
+      color: #6f6f80;
+      font-size: 11px;
+      text-align: center;
+    }
+
     footer {
       padding: 10px 16px 14px;
       border-top: 1px solid rgb(255 255 255 / 0.06);
@@ -140,7 +169,7 @@
   <header>
     <span class="dot"></span>
     <h1>Fake Fullscreen</h1>
-    <span class="ver">v1.2.1</span>
+    <span class="ver">v1.4.0</span>
   </header>
 
   <!-- Master switch -->
@@ -180,6 +209,14 @@
         <span class="track"></span><span class="knob"></span>
       </label>
     </div>
+  </section>
+
+  <!-- Element picker -->
+  <section>
+    <button id="pickElement" class="pick-btn" type="button" disabled>
+      Select element for theater mode…
+    </button>
+    <p class="pick-hint">Click anything on the page to fake-fullscreen it</p>
   </section>
 
   <!-- Per-site -->

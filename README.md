@@ -51,6 +51,7 @@ Notes:
 | --- | --- |
 | Control panel | Click the **toolbar icon** — master switch, fullscreen redirect, per-site toggle |
 | Enter theater | Hover a video → **Theater** button · player’s own fullscreen button (redirected) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> (<kbd>⌃⇧F</kbd> on macOS) |
+| Pick any element | Control panel → **Select element…** → hover the page → click the element (<kbd>Esc</kbd> / right-click cancels) |
 | Exit | The small icon (top-right of the video) · <kbd>Esc</kbd> · double-click the video · player’s fullscreen button again |
 | Change shortcut | `about:addons` → ⚙ gear → **Manage Extension Shortcuts** |
 | Full settings | Control panel → *Settings…*, or `about:addons` → extension → *Preferences* |
@@ -66,6 +67,11 @@ What you get in theater mode: the video becomes
 z-index:2147483647` (letterboxed with `object-fit: contain`, never stretched),
 the page behind dims to black, scrolling is locked (with scrollbar-width
 compensation so nothing jumps), and your original inline styles are restored
+on exit. On enter and exit the extension also pulses a synthetic window
+`resize`: sites that cache their player layout in inline pixel styles
+(YouTube pins its control-bar width and the video's size/offset that way)
+re-measure for the fullscreen view — so the control bar spans the whole
+screen and the video sits dead-center — and re-measure again for your page
 on exit.
 
 **Player controls stay in your hands.** Theater mode elevates the whole
@@ -77,6 +83,17 @@ the site re-adds the attribute). The player is focused on entry so keyboard
 shortcuts work too — <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd>
 seek, <kbd>↑</kbd>/<kbd>↓</kbd> volume. The exit control is intentionally a
 small, low-contrast icon so it stays out of the way.
+
+**Pick anything, not just detected videos.** The control panel's
+*Select element…* button arms an element picker: hover the page and
+whatever is under the cursor gets outlined (with a `tag#id.class` label) —
+click it and it goes to theater mode. Your click target is authoritative:
+a container with a video inside theaters as a container (its player UI
+stays), a bare video theaters itself, a transparent overlay over a video
+falls through to that video's usual player container, and an element with
+no reachable video (a cross-origin `<iframe>` embed, a closed-shadow-root
+player) is elevated as-is. While an iframe embed is theatered that way,
+the embed's own fullscreen button toggles the theater too.
 
 ## Options
 
@@ -128,6 +145,17 @@ to `storage.local`). Changes apply to open tabs immediately.
 5. **Cross-frame Escape** — if the focused frame has no local theater,
    `Esc` is forwarded through the background page so a theater inside another
    frame still closes.
+6. **Element picker** — *Select element…* in the popup asks the top frame to
+   arm a crosshair picker (hover outline + click to confirm; the site never
+   sees the picker's clicks). The picked element is authoritative: video
+   inside → container theater; same-origin `<iframe>` → its video inside the
+   elevated frame; cross-origin iframe or closed shadow root → the element is
+   elevated *without* a video ("videoless" mode — <kbd>Esc</kbd>,
+   double-click or overlay click still exit, and the rescue ladder only
+   verifies painting, never downgrades). While a frame's `<iframe>` is
+   theatered from the parent, `background.js` fans a suppression flag out to
+   every frame so embeds stand down instead of opening a competing theater,
+   and their Esc / fullscreen presses are forwarded as exit requests.
 
 ### Known limitations
 
@@ -151,6 +179,7 @@ to `storage.local`). Changes apply to open tabs immediately.
 | Want to change… | Look at |
 | --- | --- |
 | Control panel layout / switches | `popup.html` (styles inline), `popup.js` |
+| Element-picker behavior / look | `startPicker()` / `resolvePick()` in `content.js`, `.ffs-pick-*` in `content.css` |
 | Fullscreen-intercept heuristic | `looksLikePlayer()` in `injected.js` (45% area rule) |
 | Button style / position offsets | `.ffs-btn` in `content.css`, `BTN_MARGIN_PX` / `HOVER_PAD_PX` in `content.js` |
 | Theater geometry (e.g. fill vs letterbox) | `video.ffs-video--theater` in `content.css` |
@@ -164,7 +193,7 @@ to `storage.local`). Changes apply to open tabs immediately.
 From inside the `fake-fullscreen/` folder:
 
 ```sh
-zip -r ../fake-fullscreen-1.2.2.zip \
+zip -r dist/fake-fullscreen-1.4.0.zip \
     manifest.json popup.html popup.js injected.js \
     content.js content.css background.js \
     options.html options.js icons README.md
@@ -188,6 +217,13 @@ contain `manifest.json` directly.
       (auto-reparent rescue).
 - [ ] Site with several videos: shortcut toggles the biggest/playing one.
 - [ ] Embedded iframe player: toggles from within the frame; Esc works.
+- [ ] Picker: *Select element…* → hover outlines elements, click theaters
+      the picked container with its controls; Esc cancels the picker.
+- [ ] Picker on a cross-origin embed (iframe): the whole frame goes
+      theater; Esc inside and outside both exit; the embed's own
+      fullscreen button toggles the theater; no double-dimming.
+- [ ] Picker on an element without video: element is elevated as-is,
+      with a notice; Esc exits.
 - [ ] Controls: in theater, <kbd>Space</kbd>/arrows drive the player; the
       exit control is just a subtle icon.
 - [ ] Floating button OFF in the panel → no buttons at all (exit via

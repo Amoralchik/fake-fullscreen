@@ -125,6 +125,22 @@ async function init() {
   const info = await detectActiveSite();
   renderSiteCard(info);
 
+  // Element picker CTA — needs a page our content script can reach,
+  // with the extension active there.
+  const pickBtn = $('pickElement');
+  pickBtn.disabled = !(info && info.hostname && info.active);
+  pickBtn.addEventListener('click', async () => {
+    try {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id != null) {
+        await browser.tabs.sendMessage(tab.id, { type: 'ffs:start-picker' });
+      }
+    } catch {
+      /* page without our content script (about:, addons.mozilla.org, …) */
+    }
+    window.close();
+  });
+
   $('siteEnabled').addEventListener('change', async (e) => {
     if (!siteHost) return;
     const desired = e.target.checked;

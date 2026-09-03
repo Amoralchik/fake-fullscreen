@@ -39,6 +39,12 @@
     overlay:      'ffs-overlay',
     overlayShown: 'ffs-overlay--shown',
     locked:       'ffs-scroll-locked',
+    picking:      'ffs-picking',        // on <html> while the element picker is up
+    pickOutline:  'ffs-pick-outline',
+    pickLabel:    'ffs-pick-label',
+    pickHint:     'ffs-pick-hint',      // "click an element…" pill
+    toast:        'ffs-toast',          // transient status pill
+    toastShown:   'ffs-toast--shown',
   };
 
   const PATH_EXPAND = 'M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4';
@@ -112,6 +118,12 @@
   let scrollSave = null;
   let controlsGuard = null; // MutationObserver keeping native controls stripped
   const mouse = { x: -1, y: -1 };
+
+  // Element picker ("Select element…" from the popup) — top frame only.
+  let picker = null; // { outline, label, hint, current, mx, my }
+  // True while this frame's <iframe> is theatered BY the parent frame
+  // (picker on a cross-origin embed): this frame stands down.
+  let iframeTheaterAbove = false;
 
   /* ================================================================
    * Small helpers
@@ -318,7 +330,9 @@
       if (!video.isConnected && !(theater && theater.video === video)) untrack(video);
     }
     // If the active video/host was ripped out mid-theater → exit gracefully.
-    if (theater && (!theater.host.isConnected || !theater.video.isConnected)) exitTheater();
+    if (theater && (!theater.host.isConnected || (theater.video && !theater.video.isConnected))) {
+      exitTheater();
+    }
 
     const found = deep
       ? videosDeep(document)
@@ -416,21 +430,25 @@
       const isActive = !!(theater && theater.video === video);
 
       let show = false;
-      if (isActive) {
-        // The floating-button toggle also hides the exit icon (bug #3) —
-        // Esc / double-click / overlay click / fullscreen-key remain.
-        show = settings.buttonEnabled;
-      } else if (
-        extensionActiveHere() &&
-        settings.buttonEnabled &&
-        bigEnough &&
-        intersectsViewport &&
-        video.isConnected
-      ) {
-        show = settings.buttonHoverOnly
-          ? pointNearRect(mouse.x, mouse.y, rect, HOVER_PAD_PX)
-          : true;
+      if (!picker) {
+        if (isActive) {
+          // The floating-button toggle also hides the exit icon (bug #3) —
+          // Esc / double-click / overlay click / fullscreen-key remain.
+          show = settings.buttonEnabled;
+        } else if (
+          extensionActiveHere() &&
+          settings.buttonEnabled &&
+          bigEnough &&
+          intersectsViewport &&
+          video.isConnected
+        ) {
+          show = settings.buttonHoverOnly
+            ? pointNearRect(mouse.x, mouse.y, rect, HOVER_PAD_PX)
+            : true;
+        }
       }
+      // A parent frame theatering this frame's <iframe> owns all the UX.
+      if (iframeTheaterAbove && !isActive) show = false;
 
       // Anchor at the video's top-right corner, clamped into the viewport.
       const bw = button.offsetWidth || 90;
@@ -555,15 +573,28 @@
   }
 
   /**
-   * @param {HTMLVideoElement} video  the video to theater
+   * @param {HTMLVideoElement|null} video  the video to theater; null when
+   *   the picker elevates an element with no reachable video (an iframe
+   *   embed, a closed shadow root) — then `host` is REQUIRED
    * @param {Element} [host]  element to elevate — the fullscreen request
-   *   target when redirected (authoritative), else the climb-up heuristic
+   *   target when redirected (authoritative), the picked element from the
+   *   picker, else the climb-up heuristic
    */
   function enterTheater(video, host) {
-    if (!video || !video.isConnected) return;
     if (theater) exitTheater(); // switching videos restores the old one first
+    if (video && !video.isConnected) return;
+    if (iframeTheaterAbove) return; // a parent frame owns this frame's theater
 
-    if (!(host instanceof Element) || !host.contains(video)) host = findPlayerHost(video);
+    if (!(host instanceof Element)) {
+      if (!video) return; // videoless theater needs an explicit element
+      host = findPlayerHost(video);
+    } else if (
+      video &&
+      host.ownerDocument === video.ownerDocument && // cross-doc (iframe) picks keep their host
+      !host.contains(video)
+    ) {
+      host = findPlayerHost(video);
+    }
 
     const saved = {
       cssText:      host.style.cssText,        // snapshot of inline styles
@@ -572,26 +603,38 @@
       popoverAttr:  host.getAttribute('popover'),
       parent:       host.parentNode,
       nextSibling:  host.nextSibling,
-      controls:     video.controls,
+      controls:     video ? video.controls : null,
     };
 
-    theater = { video, host, saved, reparented: false, usedPopover: false, buttonPopover: false, stretched: [] };
+    theater = {
+      video,
+      host,
+      saved,
+      videoless: !video,
+      theatersIframe: !video && host instanceof HTMLIFrameElement,
+      reparented: false,
+      usedPopover: false,
+      buttonPopover: false,
+      stretched: [],
+    };
 
     // A bare video theaters itself; a container keeps its own controls.
     if (host === video) video.classList.add(CLS.videoActive);
     else {
       host.classList.add(CLS.hostActive);
-      video.classList.add(CLS.videoFill);
-      // The video must fill the elevated host — stretch any zero-sized
-      // shell it is wrapped in (percentage sizing resolves against it).
-      stretchEmptyWrappers(video, host, theater.stretched);
+      if (video) {
+        video.classList.add(CLS.videoFill);
+        // The video must fill the elevated host — stretch any zero-sized
+        // shell it is wrapped in (percentage sizing resolves against it).
+        stretchEmptyWrappers(video, host, theater.stretched);
+      }
     }
 
     // Tell the page-world patch a theater session is live in this frame —
     // a second fullscreen press must find us and EXIT (bug #1).
     try { document.documentElement.dataset.ffsTheater = '1'; } catch { /* ignore */ }
 
-    if (settings.hideNativeControls) {
+    if (settings.hideNativeControls && video) {
       try { video.controls = false; } catch { /* some players guard it */ }
       // Many players re-add the `controls` attribute on play / hover /
       // loadedmetadata — keep it stripped for the whole session.
@@ -610,6 +653,8 @@
 
     if (overlay) overlay.classList.add(CLS.overlayShown);
     lockScroll();
+    pokeResize();
+    requestAnimationFrame(pokeResize);
 
     // Ancestor stacking contexts (transform/filter/…) can bury a fixed
     // element — verify next frame and reparent if needed.
@@ -621,7 +666,7 @@
 
   function exitTheater() {
     if (!theater) return;
-    const { video, host, saved, reparented, usedPopover, buttonPopover, stretched } = theater;
+    const { video, host, saved, reparented, usedPopover, buttonPopover, stretched, theatersIframe } = theater;
     theater = null;
 
     // Undo the top-layer popover first (if the rescue ladder used it).
@@ -641,12 +686,12 @@
     }
 
     host.classList.remove(CLS.hostActive);
-    video.classList.remove(CLS.videoActive, CLS.videoFill);
+    if (video) video.classList.remove(CLS.videoActive, CLS.videoFill);
 
     try { delete document.documentElement.dataset.ffsTheater; } catch { /* ignore */ }
 
     if (controlsGuard) { controlsGuard.disconnect(); controlsGuard = null; }
-    try { video.controls = saved.controls; } catch { /* ignore */ }
+    if (video) { try { video.controls = saved.controls; } catch { /* ignore */ } }
 
     // Restore the tabindex we may have set for keyboard control.
     try {
@@ -679,6 +724,10 @@
 
     if (overlay) overlay.classList.remove(CLS.overlayShown);
     unlockScroll();
+    // Frames under a picked <iframe> may play for themselves again.
+    if (theatersIframe) setIframeSuppression(false);
+    pokeResize();
+    requestAnimationFrame(pokeResize);
     notifyActive(false);
     schedulePositionUpdate();
   }
@@ -699,7 +748,7 @@
   function ensurePaintedOnTop(attempt) {
     if (!theater) return;
     const { host, video } = theater;
-    if (!host.isConnected || !video.isConnected) return;
+    if (!host.isConnected || (video && !video.isConnected)) return;
 
     if (looksGood(host, video)) return;
 
@@ -738,7 +787,7 @@
       return;
     }
 
-    if (host !== video) {
+    if (video && host !== video) {
       const v = video;
       exitTheater();
       enterTheater(v, v); // bare-video mode; its own ladder starts fresh
@@ -751,7 +800,7 @@
   /** Host actually visible AND (in container mode) the video not collapsed. */
   function looksGood(host, video) {
     if (!paintsAbovePage(host)) return false;
-    if (host !== video) {
+    if (video && host !== video) {
       const vr = video.getBoundingClientRect();
       if (vr.width < 40 || vr.height < 40) return false; // black host, dead video
     }
@@ -780,11 +829,324 @@
     return true;
   }
 
+  /* ================================================================
+   * Element picker — "Select element…" from the control panel
+   *
+   * The heuristics (hover button, shortcut probe, fullscreen redirect)
+   * pick the player FOR you; the picker lets YOU pick: hover the page,
+   * click any element and it goes to theater mode. The click target is
+   * authoritative — a container with a video inside theaters as a
+   * container (site controls stay), a bare video theaters itself, and
+   * an element with no reachable video (cross-origin <iframe> embed,
+   * closed shadow root) is elevated as-is.
+   * ================================================================ */
+
+  /** Largest connected <video> at or inside root (open shadow roots too). */
+  function firstVideoDeep(root) {
+    try {
+      let best = null;
+      let bestArea = 0;
+      for (const v of videosDeep(root)) {
+        if (!v.isConnected) continue;
+        const r = v.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (area > bestArea) { bestArea = area; best = v; }
+      }
+      return best;
+    } catch { return null; }
+  }
+
+  /**
+   * Turn a picked element into { video, host } for enterTheater.
+   * video may be null (elevate the element as-is); host null means "let
+   * the climb-up heuristic choose". Returns null when the pick is
+   * unusable (the page itself).
+   */
+  function resolvePick(el) {
+    if (!(el instanceof Element) || isPageLevel(el)) return null;
+    if (el instanceof HTMLVideoElement) return { video: el, host: el };
+
+    // The picked container is authoritative when it holds a video.
+    const inside = firstVideoDeep(el);
+    if (inside) return { video: inside, host: el };
+
+    if (el instanceof HTMLIFrameElement) {
+      // Same-origin embed: use its video inside the elevated frame.
+      // Cross-origin ones can't be searched — theater the frame itself.
+      try {
+        const doc = el.contentDocument;
+        const frameVideo = doc ? firstVideoDeep(doc) : null;
+        if (frameVideo) return { video: frameVideo, host: el };
+      } catch { /* cross-origin */ }
+      return { video: null, host: el };
+    }
+
+    // Transparent overlay painted over the video: climb to the nearest
+    // ancestor that holds one, then let the usual heuristic place it.
+    let node = el.parentElement;
+    for (let hops = 0; node && !isPageLevel(node) && hops < 6; hops++) {
+      const v = firstVideoDeep(node);
+      if (v) return { video: v, host: null };
+      node = node.parentElement;
+    }
+
+    // Explicit pick, no reachable video (closed shadow root player, …):
+    // honor it rather than refuse.
+    return { video: null, host: el };
+  }
+
+  function setIframeSuppression(on) {
+    try {
+      browser.runtime.sendMessage({ type: 'ffs:iframe-theater', active: !!on }).catch(noopCatch);
+    } catch { /* noop */ }
+  }
+
+  /** Never let the picker select the extension's own widgets. */
+  function isOwnUi(el) {
+    return !!(el && el.closest && el.closest(
+      '.ffs-btn, .ffs-overlay, .ffs-pick-outline, .ffs-pick-label, .ffs-pick-hint, .ffs-toast'
+    ));
+  }
+
+  function startPicker() {
+    if (window.top !== window) return; // the mouse only reaches the top document
+    if (!extensionActiveHere()) return;
+    if (theater) exitTheater(); // start from a clean slate
+    if (picker) stopPicker();
+
+    const outline = document.createElement('div');
+    outline.className = CLS.pickOutline;
+    const label = document.createElement('div');
+    label.className = CLS.pickLabel;
+    const hint = document.createElement('div');
+    hint.className = CLS.pickHint;
+    hint.textContent = 'Click an element to fake-fullscreen it · Esc or right-click cancels';
+    const root = document.documentElement || document.body;
+    root.appendChild(outline);
+    root.appendChild(label);
+    root.appendChild(hint);
+
+    picker = { outline, label, hint, current: null, mx: -1, my: -1 };
+    root.classList.add(CLS.picking);
+
+    window.addEventListener('mousemove', onPickerMove, { capture: true, passive: true });
+    window.addEventListener('scroll', onPickerReposition, { capture: true, passive: true });
+    window.addEventListener('resize', onPickerReposition, { capture: true });
+    window.addEventListener('keydown', onPickerKey, { capture: true });
+    window.addEventListener('contextmenu', onPickerCancel, { capture: true });
+    window.addEventListener('click', onPickerClick, { capture: true });
+    window.addEventListener('touchend', onPickerTouchEnd, { capture: true });
+    // The site must not react to picker interactions (drags, pauses, menus).
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart']) {
+      window.addEventListener(type, swallowEvent, { capture: true });
+    }
+    schedulePositionUpdate(); // hide the floating Theater buttons meanwhile
+  }
+
+  function stopPicker() {
+    if (!picker) return;
+    picker.outline.remove();
+    picker.label.remove();
+    picker.hint.remove();
+    document.documentElement.classList.remove(CLS.picking);
+
+    window.removeEventListener('mousemove', onPickerMove, { capture: true });
+    window.removeEventListener('scroll', onPickerReposition, { capture: true });
+    window.removeEventListener('resize', onPickerReposition, { capture: true });
+    window.removeEventListener('keydown', onPickerKey, { capture: true });
+    window.removeEventListener('contextmenu', onPickerCancel, { capture: true });
+    window.removeEventListener('click', onPickerClick, { capture: true });
+    window.removeEventListener('touchend', onPickerTouchEnd, { capture: true });
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart']) {
+      window.removeEventListener(type, swallowEvent, { capture: true });
+    }
+    picker = null;
+    schedulePositionUpdate();
+  }
+
+  function swallowEvent(e) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  function onPickerMove(e) {
+    if (!picker) return;
+    picker.mx = e.clientX;
+    picker.my = e.clientY;
+    let el = null;
+    try { el = document.elementFromPoint(e.clientX, e.clientY); } catch { /* ignore */ }
+    if (isOwnUi(el)) el = null;
+    if (picker.current === el) return;
+    picker.current = el;
+    drawPicker();
+  }
+
+  function onPickerReposition() {
+    if (!picker || !picker.current) return;
+    requestAnimationFrame(drawPicker); // wait for layout, then re-measure
+  }
+
+  function onPickerKey(e) {
+    if (!picker || e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    stopPicker();
+  }
+
+  function onPickerCancel(e) {
+    if (!picker) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    stopPicker();
+  }
+
+  function onPickerClick(e) {
+    if (!picker) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    let el = null;
+    try { el = document.elementFromPoint(e.clientX, e.clientY); } catch { /* ignore */ }
+    if (isOwnUi(el)) return; // clicked our own widget — keep picking
+    attemptPick(el);
+  }
+
+  function onPickerTouchEnd(e) {
+    if (!picker) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    let el = null;
+    try { el = document.elementFromPoint(t.clientX, t.clientY); } catch { /* ignore */ }
+    if (isOwnUi(el)) return;
+    attemptPick(el);
+  }
+
+  function attemptPick(el) {
+    const pick = resolvePick(el);
+    if (!pick) {
+      showToast('Pick an element inside the page, not the page itself');
+      return; // stay in picking mode
+    }
+    stopPicker();
+    swallowClicksBriefly();
+    // Cross-origin embed: the frame inside must stand down while its
+    // <iframe> is theatered from out here.
+    if (!pick.video && pick.host instanceof HTMLIFrameElement) setIframeSuppression(true);
+    enterTheater(pick.video, pick.host);
+    if (theater && !theater.video) {
+      showToast(pick.host instanceof HTMLIFrameElement
+        ? 'Theatering the embedded player — Esc exits'
+        : 'No reachable video inside — theatering the element as-is (Esc exits)');
+    } else if (!theater) {
+      setIframeSuppression(false); // enterTheater refused — don't strand frames
+      showToast('Could not theater that element');
+    }
+  }
+
+  function drawPicker() {
+    if (!picker) return;
+    const el = picker.current;
+    const show = el && el.isConnected && (() => {
+      try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch { return false; }
+    })();
+    if (!show) {
+      picker.outline.style.display = 'none';
+      picker.label.style.display = 'none';
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const os = picker.outline.style;
+    os.display = 'block';
+    os.left = `${Math.round(r.left)}px`;
+    os.top = `${Math.round(r.top)}px`;
+    os.width = `${Math.round(r.width)}px`;
+    os.height = `${Math.round(r.height)}px`;
+
+    // Describe the element — tag#id.class — as plain text, no markup.
+    let text = el.tagName.toLowerCase();
+    if (el.id) text += `#${el.id}`;
+    const cls = typeof el.className === 'string'
+      ? el.className.trim().split(/\s+/).slice(0, 2).join('.')
+      : '';
+    if (cls) text += `.${cls}`;
+    picker.label.textContent = text;
+
+    // Display before measuring — offsetWidth is 0 while hidden.
+    const ls = picker.label.style;
+    ls.display = 'block';
+    const lw = picker.label.offsetWidth || 80;
+    const lh = picker.label.offsetHeight || 22;
+    const lx = Math.min(Math.max(4, r.left), Math.max(4, window.innerWidth - lw - 4));
+    let ly = r.top - lh - 6;
+    if (ly < 4) ly = r.top + 6; // no room above → just inside the outline
+    ls.left = `${Math.round(lx)}px`;
+    ls.top = `${Math.round(ly)}px`;
+  }
+
+  /**
+   * The confirming click must not fall through to the site — its second
+   * click of a double-click would otherwise reach the freshly theatered
+   * player (pausing it, opening menus, …).
+   */
+  function swallowClicksBriefly() {
+    const types = ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'click', 'dblclick', 'contextmenu'];
+    const swallow = (ev) => { ev.preventDefault(); ev.stopImmediatePropagation(); };
+    for (const t of types) window.addEventListener(t, swallow, { capture: true });
+    setTimeout(() => {
+      for (const t of types) window.removeEventListener(t, swallow, { capture: true });
+    }, 350);
+  }
+
+  /* ----------------------------------------------------------------
+   * Transient status pill (picker feedback, videoless notices).
+   * Shown as a manual popover so it paints above even a top-layer
+   * theater host.
+   * -------------------------------------------------------------- */
+
+  let toastEl = null;
+  let toastTimer = 0;
+
+  function showToast(text, ms = 3400) {
+    try {
+      if (!toastEl || !toastEl.isConnected) {
+        toastEl = document.createElement('div');
+        toastEl.className = CLS.toast;
+        toastEl.setAttribute('popover', 'manual');
+        (document.documentElement || document.body).appendChild(toastEl);
+      }
+      toastEl.textContent = text;
+      try { if (!toastEl.matches(':popover-open')) toastEl.showPopover(); } catch { /* older engine */ }
+      toastEl.classList.add(CLS.toastShown);
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(hideToast, ms);
+    } catch { /* no UI host — stay silent */ }
+  }
+
+  function hideToast() {
+    if (!toastEl) return;
+    toastEl.classList.remove(CLS.toastShown);
+    try { if (toastEl.matches(':popover-open')) toastEl.hidePopover(); } catch { /* ignore */ }
+  }
+
+  /**
+   * Sites like YouTube cache their player layout in inline pixel styles
+   * computed for the box the player had BEFORE theatering (YouTube sets
+   * an inline pixel width on its control bar and inline size/offsets on
+   * the video). A synthetic window resize makes that cached layout be
+   * recomputed against the current box — control bars span the full
+   * theater again, stale video offsets go away — and again on exit for
+   * the restored page. Two pulses: now (styles apply synchronously) and
+   * next frame (after layout / rescue-ladder work has settled).
+   */
+  function pokeResize() {
+    try { window.dispatchEvent(new Event('resize')); } catch { /* ignore */ }
+  }
+
   /* ----------------------------------------------------------------
    * Scroll lock (with scrollbar-width compensation so the page does
    * not jump when its scrollbar disappears)
    * -------------------------------------------------------------- */
-
   function lockScroll() {
     const html = document.documentElement;
     const scrollbarWidth = window.innerWidth - html.clientWidth;
@@ -827,20 +1189,23 @@
   // fan out a force-exit so a theater inside another frame closes too.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (picker) return; // the picker's own handler cancels the pick
     if (theater) {
       e.preventDefault();
       e.stopPropagation();
       exitTheater();
       return;
     }
-    if (window.top === window) {
+    // Top frame, or a frame whose <iframe> is theatered by the parent:
+    // fan a force-exit out so the live theater closes wherever it is.
+    if (window.top === window || iframeTheaterAbove) {
       try { browser.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
     }
   }, true);
 
   // Double-click on the theater host exits (like native players).
   document.addEventListener('dblclick', (e) => {
-    if (!theater) return;
+    if (!theater || picker) return;
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
     if (path.includes(theater.host)) {
       e.preventDefault();
@@ -860,6 +1225,13 @@
    * -------------------------------------------------------------- */
   document.addEventListener('ffs:request-theater', (e) => {
     if (!settings.preventNativeFullscreen || !extensionActiveHere()) return;
+    // The parent frame is theatering this frame's <iframe>: a fullscreen
+    // press here means "toggle" — forward it as an exit request instead
+    // of opening a competing local theater.
+    if (iframeTheaterAbove) {
+      try { browser.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
+      return;
+    }
     // A fullscreen press while theater is open means "exit" (bug #1) —
     // works even if the host was re-parented out of its original place.
     if (theater) { exitTheater(); return; }
@@ -923,6 +1295,9 @@
    *   ffs:force-exit  bg → frames   used for cross-frame Escape
    *   ffs:state / esc-request       frame → bg
    *   ffs:site-info   popup → frame "what host is this page?" (top frame answers)
+   *   ffs:start-picker popup → frames "arm the element picker" (top frame acts)
+   *   ffs:iframe-theater frame → bg → frames  an <iframe> is theatered
+   *                      from its parent frame — stand down until it ends
    * ================================================================ */
 
   /** Score = visible viewport share, boosted while playing / hovered. */
@@ -994,6 +1369,22 @@
           theaterActive: !!theater,
         });
       }
+
+      // The popup's "Select element…" button. Only the top frame arms a
+      // picker — the mouse only ever interacts with the top document.
+      case 'ffs:start-picker':
+        startPicker();
+        break;
+
+      // An <iframe> of this frame was theatered by the picker from the
+      // parent frame (or was released): stand down / resume locally.
+      // active:true while our own iframe-theater is live is our own echo.
+      case 'ffs:iframe-theater':
+        if (msg.active && theater && theater.theatersIframe) break;
+        iframeTheaterAbove = !!msg.active;
+        if (iframeTheaterAbove && theater) exitTheater();
+        schedulePositionUpdate();
+        break;
     }
   });
 

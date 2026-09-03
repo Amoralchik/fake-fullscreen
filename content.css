@@ -178,10 +178,17 @@ video.ffs-video--theater {
   outline: none !important;
 }
 
-/* The <video> inside a theater host: fill the host, letterboxed. */
+/* The <video> inside a theater host: fill the host, letterboxed.
+   left/top must be owned too: sites like YouTube position the video
+   with INLINE pixel offsets computed for the pre-theater box, and any
+   stale offset would shift the video off-center inside the host. */
 video.ffs-video--fill {
   width: 100% !important;
   height: 100% !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
   max-width: none !important;
   max-height: none !important;
   margin: 0 !important;
@@ -197,4 +204,102 @@ video.ffs-video--fill {
  * --------------------------------------------------------------- */
 html.ffs-scroll-locked {
   overflow: hidden !important;
+}
+
+/* ---------------------------------------------------------------
+ * Element picker (control panel → "Select element…").
+ * The outline/label/hint are never hit-test targets
+ * (pointer-events: none), so elementFromPoint keeps returning the
+ * real element under the cursor.
+ * --------------------------------------------------------------- */
+html.ffs-picking,
+html.ffs-picking * {
+  cursor: crosshair !important;
+}
+
+.ffs-pick-outline {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  margin: 0 !important;
+  display: none;
+  border: 2px solid #7c83ff !important;
+  border-radius: 3px !important;
+  background: rgb(99 102 241 / 0.16) !important;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.55),
+    inset 0 0 0 1px rgb(0 0 0 / 0.35) !important;
+}
+
+.ffs-pick-label {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  display: none;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 8px !important;
+  border: 1px solid rgb(255 255 255 / 0.2) !important;
+  border-radius: 6px !important;
+  background: rgb(17 17 24 / 0.95) !important;
+  color: #e8e8ef !important;
+  font: 500 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace !important;
+}
+
+.ffs-pick-hint {
+  position: fixed !important;
+  left: 50% !important;
+  bottom: 22px !important;
+  transform: translateX(-50%) !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  max-width: min(86vw, 560px);
+  padding: 8px 14px !important;
+  border: 1px solid rgb(255 255 255 / 0.16) !important;
+  border-radius: 999px !important;
+  background: rgb(17 17 24 / 0.92) !important;
+  color: #e8e8ef !important;
+  font: 500 12.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  text-align: center;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 26px rgb(0 0 0 / 0.45) !important;
+  opacity: 0.97;
+}
+
+/* ---------------------------------------------------------------
+ * Transient status pill (picker feedback, videoless notices).
+ * Shown via showPopover() so it paints above even a top-layer
+ * theater host — hence the explicit overrides of the [popover]
+ * UA styles (inset/margin), same trick as .ffs-btn.
+ * --------------------------------------------------------------- */
+.ffs-toast {
+  position: fixed !important;
+  top: auto !important;      /* override the [popover] UA inset:0 */
+  right: auto !important;
+  left: 50% !important;
+  bottom: 22px !important;
+  margin: 0 !important;
+  transform: translateX(-50%) !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  max-width: min(86vw, 560px);
+  padding: 8px 14px !important;
+  border: 1px solid rgb(255 255 255 / 0.16) !important;
+  border-radius: 999px !important;
+  background: rgb(17 17 24 / 0.92) !important;
+  color: #e8e8ef !important;
+  font: 500 12.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  text-align: center;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 26px rgb(0 0 0 / 0.45) !important;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.ffs-toast--shown {
+  opacity: 1;
 }

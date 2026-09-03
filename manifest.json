@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fake Fullscreen – Theater Mode",
-  "version": "1.2.2",
+  "version": "1.4.0",
   "description": "Put any HTML5 video into a borderless theater view that fills the whole tab — and redirect native fullscreen into it. No OS-level fullscreen involved.",
 
   "browser_specific_settings": {
