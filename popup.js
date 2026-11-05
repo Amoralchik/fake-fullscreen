@@ -11,6 +11,10 @@
 
 'use strict';
 
+/** Cross-browser API handle: Firefox/Zen expose `browser`, Chromium
+ *  (Chrome, Brave, Edge, …) exposes `chrome` — both promise-based in MV3. */
+const ext = globalThis.browser || globalThis.chrome;
+
 const $ = (id) => document.getElementById(id);
 
 /** Keys this panel touches. Full defaults live in content.js. */
@@ -31,10 +35,10 @@ let siteHost = ''; // hostname of the active tab, '' when unavailable
 
 async function getStorageArea() {
   try {
-    await browser.storage.sync.get({ __ffs_probe: null });
-    return browser.storage.sync;
+    await ext.storage.sync.get({ __ffs_probe: null });
+    return ext.storage.sync;
   } catch {
-    return browser.storage.local;
+    return ext.storage.local;
   }
 }
 
@@ -49,10 +53,10 @@ async function setKey(key, value) {
 
 async function detectActiveSite() {
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
     if (!tab || tab.id == null) return null;
     // Only the top frame answers 'ffs:site-info' (see content.js).
-    return await browser.tabs.sendMessage(tab.id, { type: 'ffs:site-info' });
+    return await ext.tabs.sendMessage(tab.id, { type: 'ffs:site-info' });
   } catch {
     return null; // about:, addons.mozilla.org, PDF viewer, … no content script
   }
@@ -125,15 +129,27 @@ async function init() {
   const info = await detectActiveSite();
   renderSiteCard(info);
 
-  // Element picker CTA — needs a page our content script can reach,
-  // with the extension active there.
+  // Action buttons — need a page our content script can reach, with
+  // the extension active there.
+  const usable = !!(info && info.hostname && info.active);
+
+  // "Theater mode for this tab's video": same probe as the shortcut
+  // (background picks the best video across all frames, or exits).
+  const toggleBtn = $('toggleTheater');
+  toggleBtn.disabled = !usable;
+  if (info && info.theaterActive) toggleBtn.textContent = 'Exit theater mode';
+  toggleBtn.addEventListener('click', async () => {
+    try { await ext.runtime.sendMessage({ type: 'ffs:toggle-active-tab' }); } catch { /* ignore */ }
+    window.close();
+  });
+
   const pickBtn = $('pickElement');
-  pickBtn.disabled = !(info && info.hostname && info.active);
+  pickBtn.disabled = !usable;
   pickBtn.addEventListener('click', async () => {
     try {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
       if (tab && tab.id != null) {
-        await browser.tabs.sendMessage(tab.id, { type: 'ffs:start-picker' });
+        await ext.tabs.sendMessage(tab.id, { type: 'ffs:start-picker' });
       }
     } catch {
       /* page without our content script (about:, addons.mozilla.org, …) */
@@ -158,7 +174,7 @@ async function init() {
 
   // Footer
   $('openOptions').addEventListener('click', () => {
-    browser.runtime.openOptionsPage();
+    ext.runtime.openOptionsPage();
     window.close();
   });
 }

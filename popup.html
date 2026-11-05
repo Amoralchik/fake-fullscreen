@@ -119,6 +119,12 @@
       font-weight: 650;
       cursor: pointer;
     }
+    .pick-btn.secondary {
+      background: rgb(255 255 255 / 0.06);
+      border-color: rgb(255 255 255 / 0.16);
+      color: #e8e8ef;
+      font-weight: 600;
+    }
     .pick-btn:hover:not(:disabled) { filter: brightness(1.15); }
     .pick-btn:focus-visible { outline: 2px solid #9db4ff; outline-offset: 2px; }
     .pick-btn:disabled {
@@ -202,7 +208,7 @@
     <div class="row">
       <div class="label">
         <b>Floating “Theater” button</b>
-        <span>Show hover button on videos (incl. the exit icon)</span>
+        <span>Only while you hover a video; fades when the mouse rests</span>
       </div>
       <label class="switch" title="Show the floating button on videos">
         <input type="checkbox" id="buttonEnabled" />
@@ -211,12 +217,15 @@
     </div>
   </section>
 
-  <!-- Element picker -->
+  <!-- Actions: theater the tab's video, or pick any element -->
   <section>
-    <button id="pickElement" class="pick-btn" type="button" disabled>
-      Select element for theater mode…
+    <button id="toggleTheater" class="pick-btn" type="button" disabled>
+      Theater mode for this tab's video
     </button>
-    <p class="pick-hint">Click anything on the page to fake-fullscreen it</p>
+    <button id="pickElement" class="pick-btn secondary" type="button" disabled>
+      Select element…
+    </button>
+    <p class="pick-hint">Or right-click a video → “Fake fullscreen this video”</p>
   </section>
 
   <!-- Per-site -->

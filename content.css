@@ -27,9 +27,9 @@
   z-index: 2147483647 !important; /* same as theater video — DOM order decides */
   display: inline-flex !important;
   align-items: center !important;
-  gap: 6px !important;
+  gap: 0 !important;
   margin: 0 !important;
-  padding: 7px 12px !important;
+  padding: 7px !important;  /* icon-only at rest; label slides out on hover */
   border-radius: 999px !important;
   border: 1px solid rgb(255 255 255 / 0.16) !important;
   background: rgb(17 17 24 / 0.85) !important;
@@ -41,9 +41,12 @@
   user-select: none !important;
   opacity: 0;
   pointer-events: none;
+  /* hidden → not focusable / not announced; flips only after the fade */
+  visibility: hidden;
   /* Actual position is set inline by content.js */
   transform: translate(-300px, -300px);
-  transition: opacity 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+  transition: opacity 0.2s ease, visibility 0s linear 0.2s,
+              background-color 0.16s ease, box-shadow 0.16s ease, gap 0.16s ease;
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   box-shadow: 0 6px 20px rgb(0 0 0 / 0.38) !important;
@@ -51,8 +54,30 @@
 }
 
 .ffs-btn--visible {
-  opacity: 0.95;
+  opacity: 0.9;
   pointer-events: auto;
+  visibility: visible;
+  transition: opacity 0.12s ease, visibility 0s,
+              background-color 0.16s ease, box-shadow 0.16s ease, gap 0.16s ease;
+}
+
+/* "Theater" label: collapsed at rest, slides out while hovered. */
+.ffs-btn span {
+  display: inline-block !important;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 0.18s ease, opacity 0.18s ease;
+}
+
+.ffs-btn:hover {
+  gap: 6px !important;
+  padding: 7px 12px 7px 9px !important;
+}
+
+.ffs-btn:hover span {
+  max-width: 80px;
+  opacity: 1;
 }
 
 .ffs-btn:hover {
@@ -85,6 +110,7 @@
 }
 
 .ffs-btn--active:hover {
+  padding: 6px !important; /* no label to slide out */
   background: rgb(34 34 44 / 0.75) !important;
 }
 

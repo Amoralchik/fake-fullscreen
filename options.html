@@ -199,7 +199,7 @@
 <body>
   <main class="card">
     <h1><span class="dot"></span> Fake Fullscreen – Theater Mode</h1>
-    <p class="sub">Settings are synced across your browsers via Firefox Sync when available.</p>
+    <p class="sub">Settings sync with your browser account (Firefox Sync, Chrome/Brave sync) when available.</p>
 
     <fieldset>
       <label class="row" title="Turn everything off without uninstalling">
@@ -211,13 +211,13 @@
       <label class="row">
         <input type="checkbox" id="buttonEnabled" />
         <span class="row-text"><b>Show the floating “Theater” button on videos</b>
-          <span>You can still use the keyboard shortcut without it.</span></span>
+          <span>Appears only while the cursor is on a video and fades when it rests. Without it: the shortcut, the toolbar panel, or right-click a video.</span></span>
       </label>
 
       <label class="row">
         <input type="checkbox" id="buttonHoverOnly" />
         <span class="row-text"><b>Only show the button while hovering a video</b>
-          <span>Uncheck to keep buttons visible on every detected video.</span></span>
+          <span>Uncheck to keep buttons visible on every detected video (GIF-style looping clips never get one).</span></span>
       </label>
 
       <label class="row">
@@ -277,7 +277,8 @@
     <div class="shortcut-hint">
       Shortcut: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>
       (<kbd>⌃</kbd>+<kbd>⇧</kbd>+<kbd>F</kbd> on macOS). Change it in
-      <b>about:addons → ⚙ gear → “Manage Extension Shortcuts”</b>.
+      <b>Firefox/Zen:</b> about:addons → ⚙ gear → “Manage Extension Shortcuts” ·
+      <b>Chrome/Brave/Edge:</b> <code>chrome://extensions/shortcuts</code>.
       Exit anytime with <kbd>Esc</kbd>, the icon, or double-click.
     </div>
   </main>

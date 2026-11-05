@@ -1,7 +1,7 @@
 /**
  * Fake Fullscreen / Theater Mode — options page logic
  * ================================================================
- * Plain DOM + browser.storage. DEFAULTS mirrors the copy in
+ * Plain DOM + ext.storage. DEFAULTS mirrors the copy in
  * content.js — keep both in sync.
  *
  * Settings model
@@ -12,6 +12,10 @@
  */
 
 'use strict';
+
+/** Cross-browser API handle: Firefox/Zen expose `browser`, Chromium
+ *  (Chrome, Brave, Edge, …) exposes `chrome` — both promise-based in MV3. */
+const ext = globalThis.browser || globalThis.chrome;
 
 const DEFAULTS = {
   masterEnabled:     true,
@@ -46,10 +50,10 @@ let state = { ...DEFAULTS };
 
 async function getStorageArea() {
   try {
-    await browser.storage.sync.get({ __ffs_probe: null });
-    return browser.storage.sync;
+    await ext.storage.sync.get({ __ffs_probe: null });
+    return ext.storage.sync;
   } catch {
-    return browser.storage.local;
+    return ext.storage.local;
   }
 }
 
