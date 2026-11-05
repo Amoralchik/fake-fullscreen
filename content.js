@@ -20,6 +20,10 @@
 (() => {
   'use strict';
 
+  /** Cross-browser API handle: Firefox/Zen expose `browser`, Chromium
+   *  (Chrome, Brave, Edge, …) exposes `chrome` — both promise-based in MV3. */
+  const ext = globalThis.browser || globalThis.chrome;
+
   // Re-injection guard (e.g. extension reload while the tab is open).
   if (window.__ffsContentLoaded) return;
   Object.defineProperty(window, '__ffsContentLoaded', { value: true });
@@ -83,7 +87,7 @@
 
   /**
    * Default settings. Mirrored by options.js — keep both in sync.
-   * Stored in browser.storage.sync (falls back to local).
+   * Stored in ext.storage.sync (falls back to local).
    *
    * Per-site control is a flat rules list + a default:
    *   - masterEnabled  global kill switch
@@ -94,6 +98,17 @@
     masterEnabled:     true,   // global kill switch
     defaultEnabled:    true,   // sites with no rule are on/off by default
     siteRules:         [],     // [{ domain: 'example.com', enabled: true }]
+    // Per-site player CONTAINER rules — which element becomes the theater
+    // for a given kind of content. kind: 'video' (the only auto-detected
+    // kind today; the field leaves room for others). target is either
+    //   selector: CSS selector, matched as video.closest(selector), or
+    //   levels:   ±N steps from the auto-detected container (+ = outward)
+    // Ships with YouTube's player root: its controls live in #movie_player,
+    // and theatering the bare <video> leaves them unreachable.
+    siteHosts: [
+      { domain: 'youtube.com', kind: 'video', selector: '#movie_player' },
+      { domain: 'youtube-nocookie.com', kind: 'video', selector: '#movie_player' },
+    ],
     preventNativeFullscreen: true, // redirect requestFullscreen → theater mode
     buttonEnabled:     true,   // show floating buttons on videos
     buttonHoverOnly:   true,   // only show them near the cursor
@@ -117,7 +132,8 @@
   let overlay = null;
   let scrollSave = null;
   let controlsGuard = null; // MutationObserver keeping native controls stripped
-  const mouse = { x: -1, y: -1 };
+  // inside: cursor is in this document; movedAt: last mousemove (ms)
+  const mouse = { x: -1, y: -1, inside: false, movedAt: 0, idleTimer: 0 };
 
   // Element picker ("Select element…" from the popup) — top frame only.
   let picker = null; // { outline, label, hint, current, mx, my }
@@ -164,10 +180,10 @@
 
   async function getStorageArea() {
     try {
-      await browser.storage.sync.get({ __ffs_probe: null });
-      return browser.storage.sync;
+      await ext.storage.sync.get({ __ffs_probe: null });
+      return ext.storage.sync;
     } catch {
-      return browser.storage.local;
+      return ext.storage.local;
     }
   }
 
@@ -189,34 +205,16 @@
   /* ----------------------------------------------------------------
    * Native-fullscreen interception
    *
-   * The patch must run in the PAGE's JavaScript world. Two routes:
-   *
-   *   1. PRIMARY — Firefox Xray waivers: content scripts can modify the
-   *      page's own objects via window.wrappedJSObject + exportFunction.
-   *      No <script> tag, so strict Content-Security-Policy (YouTube!)
-   *      cannot block it. That CSP block was the root cause of bug #1:
-   *      the patch never installed, so F presses hit real fullscreen.
-   *
-   *   2. FALLBACK — classic <script src="…/injected.js"> injection for
-   *      runtimes without the waiver APIs (kept in injected.js).
-   *
-   * Either way the patch reads two plain DOM attributes on <html> (the
-   * DOM is shared between worlds):
+   * The requestFullscreen patch itself lives in injected.js, declared
+   * in manifest.json as a MAIN-world content script (runs in the page's
+   * own JS world, immune to page CSP, same code in Firefox and
+   * Chromium). It reads two plain DOM attributes on <html> (the DOM is
+   * shared between worlds):
    *   data-ffs-prevent="1"  → interception is enabled (settings + site)
    *   data-ffs-theater="1"  → a theater session is live → press = EXIT
+   * and dispatches a bubbling `ffs:request-theater` event that the
+   * listener further down turns into theater mode.
    * -------------------------------------------------------------- */
-
-  function installInterception() {
-    if (!patchViaXray()) injectPageScript();
-  }
-
-  function pageFlag(name) {
-    try { return document.documentElement.dataset[name] === '1'; } catch { return false; }
-  }
-
-  function dispatchTheaterEvent(el) {
-    el.dispatchEvent(new CustomEvent('ffs:request-theater', { bubbles: true, composed: true }));
-  }
 
   /** "Looks like a player": video ≥45% of the fullscreen target's area. */
   function looksLikePlayer(el, video) {
@@ -230,70 +228,32 @@
 
   /**
    * Page-level elements must never become the theater host. YouTube
-   * fullscreens <html> (yes, the document element — its own fullscreen
-   * button calls documentElement.requestFullscreen()), and theatering
-   * html/body "works" in a nightmare way: the dark overlay is a CHILD of
-   * html, so it paints above the buried video, while every
-   * elementFromPoint sample still "hits" the host — the rescue ladder
-   * sees a perfectly painted theater and never promotes anything. The
-   * user gets a dimmed page and no video. Redirects from such targets
-   * fall back to findPlayerHost() instead (bug #5).
+   * fullscreens <html> (its fullscreen button calls
+   * documentElement.requestFullscreen()), and theatering html/body —
+   * or an app shell covering the whole viewport, like ytd-app — "works"
+   * in a nightmare way: the dark overlay paints above the buried video
+   * while every elementFromPoint sample still "hits" the host, so the
+   * rescue ladder never promotes anything. Such targets fall back to
+   * bestCandidate() + findPlayerHost() instead (bug #5).
    */
   function isPageLevel(el) {
     return el === document.documentElement || el === document.body;
   }
 
-  function patchViaXray() {
-    try {
-      const pageWin = window.wrappedJSObject;
-      if (!pageWin || typeof exportFunction !== 'function') return false;
-      const proto = pageWin.Element && pageWin.Element.prototype;
-      if (!proto) return false;
-      if (proto.ffsPatched) return true; // already patched in this frame
-
-      const okPromise = () => pageWin.Promise.resolve();
-
-      const makePatched = (original) => exportFunction(function patchedRequestFullscreen(options) {
-        // Body executes with content-script scope; `this` is the page element.
-        if (pageFlag('ffsPrevent')) {
-          // Theater already open → this press means "exit"; the content
-          // script owns that decision.
-          if (pageFlag('ffsTheater')) {
-            dispatchTheaterEvent(this);
-            return okPromise();
-          }
-          const video = this.tagName === 'VIDEO'
-            ? this
-            : (typeof this.querySelector === 'function' ? this.querySelector('video') : null);
-          if (video && looksLikePlayer(this, video)) {
-            dispatchTheaterEvent(this);
-            return okPromise();
-          }
-        }
-        return Reflect.apply(original, this, [options]);
-      }, pageWin);
-
-      if (typeof proto.requestFullscreen === 'function') {
-        proto.requestFullscreen = makePatched(proto.requestFullscreen);
-      }
-      if (typeof proto.webkitRequestFullscreen === 'function') {
-        proto.webkitRequestFullscreen = makePatched(proto.webkitRequestFullscreen);
-      }
-      proto.ffsPatched = true;
-      return true;
-    } catch {
-      return false;
+  /**
+   * Turn a fullscreen-request target into { video, host } for
+   * enterTheater. The target is authoritative only when it really is a
+   * player (a <video>, or a container the video mostly covers); any
+   * bigger element (html, body, an app shell) means "the main video",
+   * placed by the usual heuristics.
+   */
+  function theaterFromTarget(target) {
+    if (target instanceof HTMLVideoElement) return { video: target, host: target };
+    if (target instanceof Element && !isPageLevel(target)) {
+      const video = typeof target.querySelector === 'function' ? target.querySelector('video') : null;
+      if (video && looksLikePlayer(target, video)) return { video, host: target };
     }
-  }
-
-  /** Fallback: inject the page-world patch file (blocked by strict CSP). */
-  function injectPageScript() {
-    try {
-      const s = document.createElement('script');
-      s.src = browser.runtime.getURL('injected.js');
-      s.onload = () => s.remove(); // patch is installed; tag not needed anymore
-      (document.head || document.documentElement).appendChild(s);
-    } catch { /* fullscreenchange safety net still applies */ }
+    return { video: bestCandidate(), host: null };
   }
 
   /** Reflect the current effective setting onto <html data-ffs-prevent>. */
@@ -304,7 +264,7 @@
     } catch { /* documentElement not ready yet — retried on next change */ }
   }
 
-  browser.storage.onChanged.addListener((_changes, _area) => {
+  ext.storage.onChanged.addListener((_changes, _area) => {
     loadSettings().then(() => {
       syncPreventFlag();
       if (!extensionActiveHere() && theater) exitTheater();
@@ -367,7 +327,24 @@
 
   /* ================================================================
    * Per-video floating button
+   *
+   * Rules (v1.5 rework — the old button was "always somewhere"):
+   *   - shown only while the cursor is actually ON the video's player
+   *     (a hit test, not just "inside its rectangle": a menu, modal or
+   *     another element painted over the video hides it);
+   *   - hidden as soon as the cursor leaves the page / window / tab, and
+   *     after IDLE_HIDE_MS without movement (like a player's controls);
+   *   - never on decorative videos (muted + looping + no controls:
+   *     GIF-style clips, background loops) or tiny ones;
+   *   - icon-only; the "Theater" label slides out only on hover.
+   * In theater the same button is the subtle exit icon and follows the
+   * same idle rule.
    * ================================================================ */
+
+  const IDLE_HIDE_MS = 2200;  // fade buttons after this much cursor rest
+  const BTN_MARGIN_PX = 12;   // offset from the video's corner
+  const MIN_W = 200;          // smaller videos never get a button
+  const MIN_H = 112;
 
   function track(video) {
     const button = document.createElement('button');
@@ -377,6 +354,8 @@
     button.title = 'Fake Fullscreen — theater mode';
     button.setAttribute('aria-label', 'Toggle theater mode for this video');
 
+    const ui = { button, lastActive: false, hovered: false, region: null };
+
     // Toggle on click…
     button.addEventListener('click', (e) => {
       e.preventDefault();
@@ -385,13 +364,15 @@
     });
     // …and make sure the site never sees interactions with our widget
     // (avoids closing menus / pausing / focus hijinks underneath).
-    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'touchstart']) {
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'touchstart', 'dblclick']) {
       button.addEventListener(type, (e) => e.stopPropagation());
     }
+    button.addEventListener('mouseenter', () => { ui.hovered = true; });
+    button.addEventListener('mouseleave', () => { ui.hovered = false; schedulePositionUpdate(); });
 
     // documentElement (not body): immune to body display/overflow games.
     (document.documentElement || document.body).appendChild(button);
-    tracked.set(video, { button, lastActive: false });
+    tracked.set(video, ui);
   }
 
   function untrack(video) {
@@ -413,45 +394,82 @@
     });
   }
 
-  const HOVER_PAD_PX = 36;   // how close the cursor must be to reveal a button
-  const BTN_MARGIN_PX = 12;  // offset from the video's corner
+  /** GIF-style / background clips: no button, they're not "watched". */
+  function isDecorative(video) {
+    return video.muted && video.loop && !video.controls;
+  }
+
+  /** Cursor moved recently and is still in this document. */
+  function pointerActive() {
+    return mouse.inside && Date.now() - mouse.movedAt < IDLE_HIDE_MS;
+  }
+
+  /**
+   * Is the cursor really over this video's player? The element under
+   * the cursor must be the video, something inside its player box
+   * (custom players paint transparent layers over the <video>), or a
+   * shadow host wrapping it.
+   */
+  function pointerOverVideo(video, ui, rect) {
+    if (!pointNearRect(mouse.x, mouse.y, rect, 0)) return false;
+    let hit = null;
+    try { hit = document.elementFromPoint(mouse.x, mouse.y); } catch { return false; }
+    if (!hit) return false;
+    if (hit === video || hit === ui.button) return true;
+    if (!ui.region || !ui.region.isConnected || !ui.region.contains(video)) {
+      ui.region = findPlayerHost(video);
+    }
+    if (ui.region !== video && ui.region.contains(hit)) return true;
+    return hit.contains(video) && looksLikePlayer(hit, video);
+  }
 
   function updatePositions() {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    const activeHere = extensionActiveHere();
 
     for (const [video, ui] of tracked) {
       const { button } = ui;
+      const isActive = !!(theater && theater.video === video);
       const rect = video.getBoundingClientRect();
 
-      const bigEnough = rect.width >= 120 && rect.height >= 70;
-      const intersectsViewport =
-        rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw;
-      const isActive = !!(theater && theater.video === video);
-
       let show = false;
-      if (!picker) {
+      if (!picker && settings.buttonEnabled && (activeHere || isActive)) {
         if (isActive) {
-          // The floating-button toggle also hides the exit icon (bug #3) —
-          // Esc / double-click / overlay click / fullscreen-key remain.
-          show = settings.buttonEnabled;
+          // Exit icon: visible while you're moving the mouse, like the
+          // player's own controls; Esc / double-click / F always work.
+          show = ui.hovered || pointerActive();
         } else if (
-          extensionActiveHere() &&
-          settings.buttonEnabled &&
-          bigEnough &&
-          intersectsViewport &&
-          video.isConnected
+          video.isConnected &&
+          rect.width >= MIN_W && rect.height >= MIN_H &&
+          rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw &&
+          !isDecorative(video)
         ) {
           show = settings.buttonHoverOnly
-            ? pointNearRect(mouse.x, mouse.y, rect, HOVER_PAD_PX)
+            ? ui.hovered || (pointerActive() && pointerOverVideo(video, ui, rect))
             : true;
         }
       }
       // A parent frame theatering this frame's <iframe> owns all the UX.
       if (iframeTheaterAbove && !isActive) show = false;
 
+      button.classList.toggle(CLS.btnVisible, show);
+      button.classList.toggle(CLS.btnActive, isActive);
+      if (!show) continue; // hidden: don't pay for layout reads
+
+      // Only touch the DOM when the state actually changed.
+      if (ui.lastActive !== isActive) {
+        ui.lastActive = isActive;
+        renderButtonContent(button, isActive);
+        button.title = isActive ? 'Exit fake fullscreen (Esc)' : 'Fake Fullscreen — theater mode';
+        button.setAttribute('aria-label', isActive ? 'Exit theater mode' : 'Toggle theater mode for this video');
+      }
+
       // Anchor at the video's top-right corner, clamped into the viewport.
-      const bw = button.offsetWidth || 90;
+      // Measure the COLLAPSED size: a hovered pill is wider, and anchoring
+      // on that would make it jump left under the cursor.
+      const bw = ui.hovered && ui.restWidth ? ui.restWidth : (button.offsetWidth || 32);
+      if (!ui.hovered) ui.restWidth = bw;
       const bh = button.offsetHeight || 30;
       const x = Math.min(
         Math.max(rect.right - bw - BTN_MARGIN_PX, BTN_MARGIN_PX),
@@ -461,20 +479,37 @@
         Math.max(rect.top + BTN_MARGIN_PX, BTN_MARGIN_PX),
         Math.max(BTN_MARGIN_PX, vh - bh - BTN_MARGIN_PX)
       );
-
       button.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-      button.classList.toggle(CLS.btnVisible, show);
-      button.classList.toggle(CLS.btnActive, isActive);
-
-      // Only touch the DOM when the state actually changed.
-      if (ui.lastActive !== isActive) {
-        ui.lastActive = isActive;
-        // Inactive → label + icon.  Active → icon only, muted (see CSS).
-        renderButtonContent(button, isActive);
-        button.title = isActive ? 'Exit fake fullscreen' : 'Fake Fullscreen — theater mode';
-        button.setAttribute('aria-label', isActive ? 'Exit theater mode' : 'Toggle theater mode for this video');
-      }
     }
+  }
+
+  /* ----------------------------------------------------------------
+   * Right-click → "Fake fullscreen this video" (context menu)
+   * -------------------------------------------------------------- */
+
+  let contextTarget = null;
+  window.addEventListener('contextmenu', (e) => {
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+    contextTarget = { node: path[0] || e.target, x: e.clientX, y: e.clientY };
+  }, { capture: true, passive: true });
+
+  /** The video the context menu was opened on (or whose player it was). */
+  function videoFromContextTarget() {
+    if (!contextTarget) return null;
+    const { node, x, y } = contextTarget;
+    if (node instanceof HTMLVideoElement) return node;
+    // Custom players paint layers over the video: take the tracked video
+    // whose box contains the click point, preferring the playing one.
+    let best = null;
+    let bestScore = 0;
+    for (const video of tracked.keys()) {
+      if (!video.isConnected) continue;
+      const r = video.getBoundingClientRect();
+      if (!pointNearRect(x, y, r, 0)) continue;
+      const score = r.width * r.height * (video.paused ? 1 : 3);
+      if (score > bestScore) { bestScore = score; best = video; }
+    }
+    return best;
   }
 
   /* ================================================================
@@ -577,10 +612,13 @@
    *   the picker elevates an element with no reachable video (an iframe
    *   embed, a closed shadow root) — then `host` is REQUIRED
    * @param {Element} [host]  element to elevate — the fullscreen request
-   *   target when redirected (authoritative), the picked element from the
-   *   picker, else the climb-up heuristic
+   *   target when redirected, the picked element from the picker, else
+   *   the climb-up heuristic
+   * @param {{explicit?: boolean}} [opts]  explicit: the caller chose the
+   *   host on purpose (picker, layer up/down, ladder downgrade) — skip the
+   *   per-site container rules and keep that host
    */
-  function enterTheater(video, host) {
+  function enterTheater(video, host, opts = {}) {
     if (theater) exitTheater(); // switching videos restores the old one first
     if (video && !video.isConnected) return;
     if (iframeTheaterAbove) return; // a parent frame owns this frame's theater
@@ -591,9 +629,21 @@
     } else if (
       video &&
       host.ownerDocument === video.ownerDocument && // cross-doc (iframe) picks keep their host
-      !host.contains(video)
+      !containsDeep(host, video)
     ) {
       host = findPlayerHost(video);
+    }
+
+    // Per-site container rule (e.g. YouTube → #movie_player). A host the
+    // user chose — by rule or explicitly — is "pinned": the rescue ladder
+    // may lift it into the top layer but never swaps it for something else.
+    let pinned = !!opts.explicit;
+    let rule = null;
+    if (video && !opts.explicit) {
+      rule = hostRuleFor('video');
+      const ruled = rule ? hostFromRule(rule, video, host) : null;
+      if (ruled) { host = ruled; pinned = true; }
+      else rule = null;
     }
 
     const saved = {
@@ -616,6 +666,8 @@
       usedPopover: false,
       buttonPopover: false,
       stretched: [],
+      pinned,
+      rule, // the site rule that chose this host, if any
     };
 
     // A bare video theaters itself; a container keeps its own controls.
@@ -787,10 +839,17 @@
       return;
     }
 
+    // A pinned host (site rule / layer step) is what the user asked for:
+    // never downgrade it to the bare <video> — on YouTube that is exactly
+    // the mode where the player's controls stop working. Leave it lifted
+    // as far as the ladder got; layer up/down in the panel can adjust it.
+    if (theater.pinned) return;
+
     if (video && host !== video) {
       const v = video;
       exitTheater();
-      enterTheater(v, v); // bare-video mode; its own ladder starts fresh
+      enterTheater(v, v, { explicit: true }); // bare-video mode; its own ladder starts fresh
+      if (theater) theater.pinned = false; // a downgrade, not a user choice
       return;
     }
 
@@ -827,6 +886,185 @@
       }
     }
     return true;
+  }
+
+  /* ================================================================
+   * Per-site player containers — rules, layer up/down, "save for site"
+   *
+   * Auto-detection picks the element to theater; for some sites it lands
+   * one layer too low or too high (YouTube: the bare <video> instead of
+   * #movie_player, whose layers carry the controls). The control panel
+   * lets you step the live theater one layer up/down and save the result
+   * for the site — as a CSS selector when the element has a stable one,
+   * else as a ±N offset from the auto-detected container.
+   * ================================================================ */
+
+  /** Parent across open shadow-root boundaries. */
+  function parentDeep(el) {
+    if (el.parentElement) return el.parentElement;
+    const root = el.getRootNode && el.getRootNode();
+    return root && root.host ? root.host : null;
+  }
+
+  function containsDeep(ancestor, node) {
+    for (let n = node; n; n = parentDeep(n)) if (n === ancestor) return true;
+    return false;
+  }
+
+  /** First rule for this site + content kind ('video'). */
+  function hostRuleFor(kind) {
+    const host = currentHostname();
+    if (!host) return null;
+    for (const r of settings.siteHosts || []) {
+      if (r && r.kind === kind && domainMatches(r.domain, host)) return r;
+    }
+    return null;
+  }
+
+  /** Apply a rule; null when it doesn't fit this page (fall back to auto). */
+  function hostFromRule(rule, video, autoHost) {
+    if (rule.selector) {
+      let el = null;
+      try {
+        for (let n = video; n && !el; n = parentDeep(n)) {
+          if (n.matches && n.matches(rule.selector)) el = n;
+        }
+      } catch { return null; } // invalid selector
+      return el && !isPageLevel(el) ? el : null;
+    }
+    const levels = Number(rule.levels);
+    if (Number.isInteger(levels) && levels !== 0) return shiftLayer(autoHost, video, levels);
+    return null;
+  }
+
+  /**
+   * Move n layers from `host`: n > 0 outward (parents), n < 0 inward
+   * (towards the video). Never past the page level, never below the video.
+   */
+  function shiftLayer(host, video, n) {
+    let el = host;
+    if (n > 0) {
+      for (let i = 0; i < n; i++) {
+        const up = parentDeep(el);
+        if (!up || isPageLevel(up)) break;
+        el = up;
+      }
+    } else {
+      for (let i = 0; i < -n && el !== video; i++) {
+        // the child of `el` on the path down to the video
+        let child = video;
+        while (child && parentDeep(child) !== el) child = parentDeep(child);
+        if (!child) break;
+        el = child;
+      }
+    }
+    return el;
+  }
+
+  /** "div#movie_player.html5-video-player" — for labels. */
+  function describeEl(el) {
+    let text = el.tagName.toLowerCase();
+    if (el.id) text += `#${el.id}`;
+    const cls = typeof el.className === 'string'
+      ? el.className.trim().split(/\s+/).filter((c) => c && !c.startsWith('ffs-')).slice(0, 2).join('.')
+      : '';
+    if (cls) text += `.${cls}`;
+    return text;
+  }
+
+  /**
+   * A selector that finds `host` again from the video on future pages:
+   * a plain #id, else tag + up to two classes. Must resolve back to this
+   * very element via closest(), or null (then a ±N offset is saved).
+   */
+  function selectorFor(host, video) {
+    const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+    const candidates = [];
+    // ids with long digit runs are usually generated per page — skip those
+    if (host.id && !/\d{3,}/.test(host.id)) candidates.push(`#${esc(host.id)}`);
+    const classes = typeof host.className === 'string'
+      ? host.className.trim().split(/\s+/).filter((c) => c && !c.startsWith('ffs-') && !/\d{3,}/.test(c))
+      : [];
+    const tag = host.tagName.toLowerCase();
+    if (classes.length) candidates.push(`${tag}.${classes.slice(0, 2).map(esc).join('.')}`);
+    if (classes.length) candidates.push(`${tag}.${esc(classes[0])}`);
+    for (const sel of candidates) {
+      try {
+        if (hostFromRule({ selector: sel }, video, host) === host) return sel;
+      } catch { /* try the next */ }
+    }
+    return null;
+  }
+
+  /** Signed layer distance from the auto-detected container to `host`. */
+  function layerOffset(host, video) {
+    const auto = findPlayerHost(video);
+    if (auto === host) return 0;
+    let n = 0;
+    for (let el = auto; el; el = parentDeep(el)) { if (el === host) return n; n++; }
+    n = 0;
+    for (let el = host; el; el = parentDeep(el)) { if (el === auto) return -n; n++; }
+    return 0;
+  }
+
+  /** Live theater → panel description. */
+  function theaterInfo() {
+    if (!theater) return null;
+    const { host, video, rule } = theater;
+    return {
+      hostname: currentHostname(),
+      label: describeEl(host),
+      canUp: !!video && !isPageLevel(parentDeep(host) || document.documentElement),
+      canDown: !!video && host !== video,
+      kind: video ? 'video' : null,
+      rule: rule ? { domain: rule.domain, selector: rule.selector || null, levels: rule.levels || null } : null,
+    };
+  }
+
+  /** Panel's ▲/▼: re-theater one layer up/down, keeping it pinned. */
+  function stepLayer(dir) {
+    if (!theater || !theater.video) return;
+    const { video, host } = theater;
+    const next = shiftLayer(host, video, dir > 0 ? 1 : -1);
+    if (next === host) return;
+    exitTheater();
+    enterTheater(video, next, { explicit: true });
+  }
+
+  /** Panel's "Save for site": persist the live host as this site's rule. */
+  async function saveLayerRule() {
+    if (!theater || !theater.video) return null;
+    const { video, host } = theater;
+    const domain = currentHostname().replace(/^www\./, '');
+    if (!domain) return null;
+    const selector = selectorFor(host, video);
+    const levels = selector ? 0 : layerOffset(host, video);
+    const rule = selector
+      ? { domain, kind: 'video', selector }
+      : { domain, kind: 'video', levels };
+    const area = await getStorageArea();
+    const { siteHosts } = await area.get({ siteHosts: DEFAULTS.siteHosts });
+    const rest = (siteHosts || []).filter((r) => !(r && r.kind === 'video' && r.domain === domain));
+    // Most specific first: a saved site rule must beat broader ones.
+    await area.set({ siteHosts: [rule, ...rest] });
+    settings.siteHosts = [rule, ...rest];
+    theater.rule = rule;
+    return rule;
+  }
+
+  /** Panel's "Use automatic": drop this site's rule, re-detect. */
+  async function clearLayerRule() {
+    const host = currentHostname();
+    const area = await getStorageArea();
+    const { siteHosts } = await area.get({ siteHosts: DEFAULTS.siteHosts });
+    const rest = (siteHosts || []).filter((r) => !(r && r.kind === 'video' && domainMatches(r.domain, host)));
+    await area.set({ siteHosts: rest });
+    settings.siteHosts = rest;
+    if (theater && theater.video) {
+      const v = theater.video;
+      exitTheater();
+      enterTheater(v);
+    }
   }
 
   /* ================================================================
@@ -897,7 +1135,7 @@
 
   function setIframeSuppression(on) {
     try {
-      browser.runtime.sendMessage({ type: 'ffs:iframe-theater', active: !!on }).catch(noopCatch);
+      ext.runtime.sendMessage({ type: 'ffs:iframe-theater', active: !!on }).catch(noopCatch);
     } catch { /* noop */ }
   }
 
@@ -1033,7 +1271,7 @@
     // Cross-origin embed: the frame inside must stand down while its
     // <iframe> is theatered from out here.
     if (!pick.video && pick.host instanceof HTMLIFrameElement) setIframeSuppression(true);
-    enterTheater(pick.video, pick.host);
+    enterTheater(pick.video, pick.host, { explicit: !!pick.host });
     if (theater && !theater.video) {
       showToast(pick.host instanceof HTMLIFrameElement
         ? 'Theatering the embedded player — Esc exits'
@@ -1178,8 +1416,27 @@
   window.addEventListener('mousemove', (e) => {
     mouse.x = e.clientX;
     mouse.y = e.clientY;
+    mouse.inside = true;
+    mouse.movedAt = Date.now();
     schedulePositionUpdate();
+    // Re-check once the cursor has rested: buttons fade out on idle,
+    // like a player's own controls.
+    clearTimeout(mouse.idleTimer);
+    mouse.idleTimer = setTimeout(schedulePositionUpdate, IDLE_HIDE_MS + 30);
   }, { passive: true });
+
+  // The cursor left this document (to the browser UI, another split-view
+  // pane, or the OS). No mousemove ever reports that — the old code kept
+  // the last in-video coordinates forever, so the button stayed up after
+  // you moved away. Moving INTO a child <iframe> reports relatedTarget =
+  // the iframe instead; the hit test in pointerOverVideo() covers that.
+  document.addEventListener('mouseout', (e) => {
+    if (!e.relatedTarget) { mouse.inside = false; schedulePositionUpdate(); }
+  }, { capture: true, passive: true });
+  window.addEventListener('blur', () => { mouse.inside = false; schedulePositionUpdate(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { mouse.inside = false; schedulePositionUpdate(); }
+  });
 
   // capture → catches scrolls of inner containers too
   window.addEventListener('scroll', schedulePositionUpdate, { capture: true, passive: true });
@@ -1190,6 +1447,7 @@
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (picker) return; // the picker's own handler cancels the pick
+    if (theater && siteMenuHasFocus()) return; // Esc closes the player's menu first
     if (theater) {
       e.preventDefault();
       e.stopPropagation();
@@ -1199,19 +1457,62 @@
     // Top frame, or a frame whose <iframe> is theatered by the parent:
     // fan a force-exit out so the live theater closes wherever it is.
     if (window.top === window || iframeTheaterAbove) {
-      try { browser.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
+      try { ext.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
     }
   }, true);
 
-  // Double-click on the theater host exits (like native players).
+  /**
+   * Is a site menu / dialog inside the theater focused (YouTube's
+   * settings menu, a quality picker, …)? Then Escape belongs to it.
+   */
+  function siteMenuHasFocus() {
+    try {
+      const a = document.activeElement;
+      return !!(a && a !== theater.host && theater.host.contains(a) &&
+        a.closest('[role="menu"], [role="menuitem"], [role="dialog"], [role="listbox"], [role="menuitemradio"]'));
+    } catch { return false; }
+  }
+
+  const INTERACTIVE_SEL =
+    'button, a[href], input, select, textarea, label, [contenteditable=""], [contenteditable="true"], ' +
+    '[role="button"], [role="slider"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
+    '[role="menuitemcheckbox"], [role="checkbox"], [role="switch"], [role="tab"], [role="listbox"], ' +
+    '[role="option"], [role="progressbar"], [role="dialog"]';
+
+  /**
+   * Double-click exits — but only on the picture itself. It used to
+   * exit on a double-click ANYWHERE in the host, so two quick clicks on
+   * the player's own controls (scrubbing the seek bar, nudging volume,
+   * skip buttons) threw you out of theater mode: the player "didn't
+   * take input". Controls are recognised by tag/ARIA role, and by size
+   * (anything much smaller than the picture is chrome, not the video).
+   */
+  function isVideoSurface(path) {
+    const { host, video } = theater;
+    for (const node of path) {
+      if (node === host) break;
+      if (!(node instanceof Element)) continue;
+      if (node === video) return true;
+      if (node.matches && node.matches(INTERACTIVE_SEL)) return false;
+    }
+    const target = path.find((n) => n instanceof Element);
+    if (!target) return false;
+    if (target === host || target === video) return true;
+    try {
+      const tr = target.getBoundingClientRect();
+      const hr = host.getBoundingClientRect();
+      return tr.width * tr.height >= 0.4 * hr.width * hr.height;
+    } catch { return false; }
+  }
+
   document.addEventListener('dblclick', (e) => {
     if (!theater || picker) return;
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
-    if (path.includes(theater.host)) {
-      e.preventDefault();
-      e.stopPropagation();
-      exitTheater();
-    }
+    if (!path.includes(theater.host)) return;
+    if (!theater.videoless && !isVideoSurface(path)) return; // a control — let the player have it
+    e.preventDefault();
+    e.stopPropagation();
+    exitTheater();
   }, true);
 
   /* ----------------------------------------------------------------
@@ -1229,7 +1530,7 @@
     // press here means "toggle" — forward it as an exit request instead
     // of opening a competing local theater.
     if (iframeTheaterAbove) {
-      try { browser.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
+      try { ext.runtime.sendMessage({ type: 'ffs:esc-request' }).catch(noopCatch); } catch { /* noop */ }
       return;
     }
     // A fullscreen press while theater is open means "exit" (bug #1) —
@@ -1238,22 +1539,9 @@
 
     // e.target is the element fullscreen was requested on — the player
     // CONTAINER for custom players (its own controls stay usable), or
-    // the <video> itself for native ones. That target is authoritative
-    // — except when it is page-level (html/body): YouTube fullscreens
-    // <html>, which must not be theatered (see isPageLevel). Then the
-    // climb-up heuristic picks the real player container instead.
-    const target = e.target instanceof Element ? e.target : null;
-    let video = null;
-    let host = null;
-    if (target instanceof HTMLVideoElement) {
-      video = host = target;
-    } else if (target && !isPageLevel(target)) {
-      video = target.querySelector('video');
-      if (video) host = target;
-    }
-    // Page-level target (or no video inside): score every tracked video
-    // and let the best one host the theater.
-    if (!video) video = bestCandidate();
+    // the <video> itself for native ones. Page-level targets (YouTube
+    // fullscreens <html>) resolve to the best video + its player host.
+    const { video, host } = theaterFromTarget(e.target);
     if (video) enterTheater(video, host);
   }, true);
 
@@ -1273,17 +1561,18 @@
       : (typeof el.querySelector === 'function' ? el.querySelector('video') : null);
     if (!video && !theater) return; // full-page fullscreen of something else — not ours
 
-    try { document.exitFullscreen(); } catch { /* ignore */ }
-    if (theater) exitTheater();
-    // The fullscreen target doubles as the theater host (player container)
-    // — unless it is page-level (YouTube fullscreens <html>): then the
-    // climb-up heuristic picks the real player container instead.
-    else if (video) {
-      enterTheater(
-        video,
-        el instanceof Element && !isPageLevel(el) && !(el instanceof HTMLVideoElement) ? el : null
-      );
-    }
+    try { document.exitFullscreen().catch(noopCatch); } catch { /* ignore */ }
+    if (theater) { exitTheater(); return; }
+    // Let the site's own fullscreen → normal re-layout finish before we
+    // measure and elevate its player, or we'd theater a mid-transition
+    // layout (YouTube moves its player between containers on fullscreen).
+    setTimeout(() => {
+      if (theater || !extensionActiveHere()) return;
+      const pick = theaterFromTarget(el);
+      if (pick.video && pick.video.isConnected) {
+        enterTheater(pick.video, pick.host && pick.host.isConnected ? pick.host : null);
+      }
+    }, 120);
   }, true);
 
   /* ================================================================
@@ -1331,7 +1620,7 @@
     if (video) enterTheater(video);
   }
 
-  browser.runtime.onMessage.addListener((msg) => {
+  ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return;
 
     switch (msg.type) {
@@ -1345,7 +1634,7 @@
           active: !!theater,
         };
         Promise.resolve().then(() => {
-          try { browser.runtime.sendMessage(payload).catch(noopCatch); } catch { /* noop */ }
+          try { ext.runtime.sendMessage(payload).catch(noopCatch); } catch { /* noop */ }
         });
         break;
       }
@@ -1361,13 +1650,49 @@
       // The popup asks the TOP frame which site this is and whether the
       // extension is active here. Other frames stay silent so the popup
       // always describes the page's own host.
+      // sendResponse (not a returned Promise): Chromium ignores Promises
+      // returned from onMessage listeners.
       case 'ffs:site-info': {
         if (window.top !== window) return undefined;
-        return Promise.resolve({
+        sendResponse({
           hostname: currentHostname(),
           active: extensionActiveHere(),
           theaterActive: !!theater,
         });
+        return undefined;
+      }
+
+      // Control panel's "Player layer" card. Only the frame that owns the
+      // live theater answers (it may be an embed, not the top frame).
+      case 'ffs:host-info':
+        if (!theater) return undefined;
+        sendResponse(theaterInfo());
+        return undefined;
+
+      case 'ffs:host-step':
+        if (!theater) return undefined;
+        stepLayer(msg.dir);
+        sendResponse(theaterInfo());
+        return undefined;
+
+      case 'ffs:host-save':
+        if (!theater) return undefined;
+        saveLayerRule().then(() => sendResponse(theaterInfo()), () => sendResponse(theaterInfo()));
+        return true; // async sendResponse
+
+      case 'ffs:host-auto':
+        if (!theater) return undefined;
+        clearLayerRule().then(() => sendResponse(theaterInfo()), () => sendResponse(theaterInfo()));
+        return true;
+
+      // Right-click → "Fake fullscreen this video" (background routes it
+      // to the frame the menu was opened in).
+      case 'ffs:context-video': {
+        const video = videoFromContextTarget();
+        if (theater && (!video || theater.video === video)) exitTheater();
+        else if (video) enterTheater(video);
+        else showToast('No video under the cursor — try “Select element…” in the toolbar panel');
+        break;
       }
 
       // The popup's "Select element…" button. Only the top frame arms a
@@ -1389,18 +1714,16 @@
   });
 
   function notifyActive(active) {
-    try { browser.runtime.sendMessage({ type: 'ffs:state', active }).catch(noopCatch); } catch { /* noop */ }
+    try { ext.runtime.sendMessage({ type: 'ffs:state', active }).catch(noopCatch); } catch { /* noop */ }
   }
 
   /* ================================================================
    * Boot
    * ================================================================ */
 
-  // 1. Page-world patch must exist before any page script caches the
-  //    original requestFullscreen — install immediately (document_start).
-  installInterception();
-
-  // 2. Load settings, then flag interception on <html data-ffs-prevent>.
+  // The page-world patch (injected.js) is installed by the manifest's
+  // MAIN-world content script. Load settings, then flag interception on
+  // <html data-ffs-prevent> so the patch starts redirecting.
   loadSettings().then(syncPreventFlag).catch(noopCatch);
 
   // Cheap periodic sweep (shallow) between mutation-driven deep scans.

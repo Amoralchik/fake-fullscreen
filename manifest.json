@@ -1,32 +1,35 @@
 {
   "manifest_version": 3,
   "name": "Fake Fullscreen – Theater Mode",
-  "version": "1.4.0",
-  "description": "Put any HTML5 video into a borderless theater view that fills the whole tab — and redirect native fullscreen into it. No OS-level fullscreen involved.",
-
+  "version": "1.5.0",
+  "description": "Any video in a borderless theater view filling the whole tab, ideal for split view. Fullscreen buttons open it, not OS fullscreen.",
   "browser_specific_settings": {
     "gecko": {
       "id": "fake-fullscreen@local.addon",
       "strict_min_version": "142.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   },
-
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-
-  "permissions": ["storage"],
-
+  "permissions": [
+    "storage",
+    "contextMenus"
+  ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ],
+    "service_worker": "background.js"
   },
-
   "action": {
     "default_title": "Fake Fullscreen – open control panel",
     "default_popup": "popup.html",
@@ -35,7 +38,6 @@
       "32": "icons/icon-32.png"
     }
   },
-
   "commands": {
     "toggle-fake-fullscreen": {
       "suggested_key": {
@@ -45,24 +47,33 @@
       "description": "Toggle fake fullscreen (theater mode) for the best video on the page"
     }
   },
-
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true
   },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["injected.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "injected.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true

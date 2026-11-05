@@ -119,6 +119,12 @@
       font-weight: 650;
       cursor: pointer;
     }
+    .pick-btn.secondary {
+      background: rgb(255 255 255 / 0.06);
+      border-color: rgb(255 255 255 / 0.16);
+      color: #e8e8ef;
+      font-weight: 600;
+    }
     .pick-btn:hover:not(:disabled) { filter: brightness(1.15); }
     .pick-btn:focus-visible { outline: 2px solid #9db4ff; outline-offset: 2px; }
     .pick-btn:disabled {
@@ -127,6 +133,37 @@
       color: #6f6f80;
       cursor: default;
     }
+    /* "Player layer" card — only while a theater is live */
+    .layer[hidden] { display: none; }
+    .layer .el {
+      display: block;
+      margin: 2px 0 8px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: rgb(255 255 255 / 0.05);
+      color: #c9c9ff;
+      font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .layer .btns { display: flex; gap: 6px; }
+    .layer .btns button {
+      flex: 1;
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px solid rgb(255 255 255 / 0.16);
+      background: rgb(255 255 255 / 0.06);
+      color: #e8e8ef;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .layer .btns button:hover:not(:disabled) { background: rgb(255 255 255 / 0.12); }
+    .layer .btns button:disabled { color: #6f6f80; cursor: default; }
+    .layer .btns button.save { border-color: rgb(99 102 241 / 0.6); background: rgb(99 102 241 / 0.25); }
+    .layer .status { margin: 6px 1px 2px; color: #9a9aac; font-size: 11px; }
+
     .pick-hint {
       margin: 7px 1px 3px;
       color: #6f6f80;
@@ -169,7 +206,7 @@
   <header>
     <span class="dot"></span>
     <h1>Fake Fullscreen</h1>
-    <span class="ver">v1.4.0</span>
+    <span class="ver" id="ver"></span>
   </header>
 
   <!-- Master switch -->
@@ -202,7 +239,7 @@
     <div class="row">
       <div class="label">
         <b>Floating “Theater” button</b>
-        <span>Show hover button on videos (incl. the exit icon)</span>
+        <span>Only while you hover a video; fades when the mouse rests</span>
       </div>
       <label class="switch" title="Show the floating button on videos">
         <input type="checkbox" id="buttonEnabled" />
@@ -211,12 +248,35 @@
     </div>
   </section>
 
-  <!-- Element picker -->
+  <!-- Actions: theater the tab's video, or pick any element -->
   <section>
-    <button id="pickElement" class="pick-btn" type="button" disabled>
-      Select element for theater mode…
+    <button id="toggleTheater" class="pick-btn" type="button" disabled>
+      Theater mode for this tab's video
     </button>
-    <p class="pick-hint">Click anything on the page to fake-fullscreen it</p>
+    <button id="pickElement" class="pick-btn secondary" type="button" disabled>
+      Select element…
+    </button>
+    <p class="pick-hint">Or right-click a video → “Fake fullscreen this video”</p>
+  </section>
+
+  <!-- Live theater: which element is elevated, step it, save per site -->
+  <section class="layer" id="layerSection" hidden>
+    <div class="row" style="padding-bottom:2px">
+      <div class="label">
+        <b>Player layer</b>
+        <span>Controls not working? Step out to the player's container.</span>
+      </div>
+    </div>
+    <code class="el" id="layerEl">…</code>
+    <div class="btns">
+      <button id="layerUp" type="button" title="Theater the element that wraps this one">▲ Outer</button>
+      <button id="layerDown" type="button" title="Theater the element inside, towards the video">▼ Inner</button>
+    </div>
+    <div class="btns" style="margin-top:6px">
+      <button id="layerSave" class="save" type="button">Save for site</button>
+      <button id="layerAuto" type="button" title="Forget this site's rule and detect automatically">Automatic</button>
+    </div>
+    <p class="status" id="layerStatus"></p>
   </section>
 
   <!-- Per-site -->

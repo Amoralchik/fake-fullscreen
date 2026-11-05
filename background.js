@@ -1,5 +1,6 @@
 /**
- * Fake Fullscreen / Theater Mode — background event page (MV3)
+ * Fake Fullscreen / Theater Mode — background (MV3: Firefox event page,
+ * Chromium service worker — same file, see manifest "background")
  * ================================================================
  * Tiny router. It owns no UI and no logic beyond picking WHICH frame
  * of the active tab should toggle.
@@ -19,6 +20,10 @@
 
 'use strict';
 
+/** Cross-browser API handle: Firefox/Zen expose `browser`, Chromium
+ *  (Chrome, Brave, Edge, …) exposes `chrome` — both promise-based in MV3. */
+const ext = globalThis.browser || globalThis.chrome;
+
 /** How long to collect probe reports before deciding (ms). */
 const PROBE_WINDOW_MS = 180;
 
@@ -37,7 +42,7 @@ function makeId() {
 
 async function getActiveTabId() {
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
     return tab ? tab.id : null;
   } catch {
     return null;
@@ -48,7 +53,7 @@ function safeSend(tabId, message, options) {
   // "Could not establish connection" is normal when a frame has no
   // receiver — swallow it.
   try {
-    const p = browser.tabs.sendMessage(tabId, message, options);
+    const p = ext.tabs.sendMessage(tabId, message, options);
     if (p && typeof p.catch === 'function') p.catch(() => {});
   } catch { /* ignore */ }
 }
@@ -89,7 +94,7 @@ function resolveProbe(id) {
  * Wiring
  * ---------------------------------------------------------------- */
 
-browser.runtime.onMessage.addListener((msg, sender) => {
+ext.runtime.onMessage.addListener((msg, sender) => {
   if (!msg || typeof msg !== 'object') return;
 
   switch (msg.type) {
@@ -130,6 +135,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       break;
     }
 
+    // Control panel's "Theater mode" button: same path as the shortcut.
+    case 'ffs:toggle-active-tab': {
+      getActiveTabId().then(beginProbe);
+      break;
+    }
+
     // Per-tab badge feedback while a theater is up in this frame.
     case 'ffs:state': {
       const tabId = sender.tab ? sender.tab.id : null;
@@ -140,18 +151,54 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 });
 
 function setBadge(tabId, on) {
+  const quiet = (p) => { if (p && typeof p.catch === 'function') p.catch(() => {}); };
   try {
-    browser.action.setBadgeText({ tabId, text: on ? 'ON' : '' });
-    if (on) browser.action.setBadgeBackgroundColor({ tabId, color: '#e5484d' });
+    // The tab may close before this lands — swallow those rejections.
+    quiet(ext.action.setBadgeText({ tabId, text: on ? 'ON' : '' }));
+    if (on) quiet(ext.action.setBadgeBackgroundColor({ tabId, color: '#e5484d' }));
   } catch { /* older runtimes without tab-scoped badges */ }
 }
 
 // Keyboard shortcut (commands."toggle-fake-fullscreen")
-browser.commands.onCommand.addListener((command) => {
+ext.commands.onCommand.addListener((command) => {
   if (command === 'toggle-fake-fullscreen') {
     getActiveTabId().then(beginProbe);
   }
 });
 
-// Note: the toolbar icon now opens the control panel (popup.html), so
-// browser.action.onClicked intentionally has no listener anymore.
+/* ------------------------------------------------------------------
+ * Context menu: right-click a video → "Fake fullscreen this video".
+ * Routed to the exact frame the menu was opened in, which knows the
+ * element under the cursor (content.js records it on `contextmenu`).
+ * Menus persist across browser restarts, so (re)create them on
+ * install/update only — the Chromium-recommended pattern.
+ * ---------------------------------------------------------------- */
+
+const MENU_VIDEO = 'ffs-context-video';
+
+function createMenus() {
+  if (!ext.contextMenus) return;
+  try {
+    // Promise form: Firefox's browser.* takes no callbacks.
+    Promise.resolve(ext.contextMenus.removeAll()).then(() => {
+      ext.contextMenus.create({
+        id: MENU_VIDEO,
+        title: 'Fake fullscreen this video',
+        contexts: ['video'],
+      });
+    }).catch(() => {});
+  } catch { /* menus unavailable (e.g. Firefox for Android) */ }
+}
+
+ext.runtime.onInstalled.addListener(createMenus);
+if (ext.runtime.onStartup) ext.runtime.onStartup.addListener(createMenus);
+
+if (ext.contextMenus) {
+  ext.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== MENU_VIDEO || !tab || tab.id == null) return;
+    safeSend(tab.id, { type: 'ffs:context-video' }, { frameId: info.frameId || 0 });
+  });
+}
+
+// Note: the toolbar icon opens the control panel (popup.html), so
+// action.onClicked intentionally has no listener.
