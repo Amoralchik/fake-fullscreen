@@ -76,6 +76,7 @@
     }
     .rule-add input {
       flex: 1;
+      min-width: 0; /* let 4-field rows shrink inside the card */
       background: #14141b;
       color: #e8e8ef;
       border: 1px solid rgb(255 255 255 / 0.12);
@@ -143,6 +144,17 @@
       padding: 0 4px;
     }
     li.rule .remove:hover { color: #ff7b7b; }
+    li.rule .target {
+      color: #c9c9ff;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 45%;
+    }
+    li.rule .kind { color: #9a9aac; font-size: 11.5px; }
+    .field-error { margin: 0 0 6px; min-height: 0; color: #ff8a8a; font-size: 12px; }
+    .field-error:empty { display: none; }
 
     .actions {
       margin-top: 22px;
@@ -266,6 +278,26 @@
         <button id="addRule" type="button">Add</button>
       </div>
       <ul id="ruleList" class="rule-list"></ul>
+    </div>
+
+    <div class="field">
+      <div class="row-text"><b>Player container per site</b>
+        <span>Which element fills the tab in theater mode. If a player's controls stop
+          responding, the theater is one layer too deep (YouTube: the bare
+          <code>&lt;video&gt;</code> instead of <code>#movie_player</code>). Enter a CSS
+          selector matched from the video outward, or <code>+1</code> / <code>-1</code> to go
+          that many layers out / in from the automatic choice. Easiest: open theater
+          mode, use “Player layer ▲ / ▼” in the toolbar panel, then “Save for site”.</span></div>
+      <div class="rule-add">
+        <input id="hostDomain" placeholder="example.com" spellcheck="false" />
+        <select id="hostKind" title="Content type the rule applies to">
+          <option value="video">Video</option>
+        </select>
+        <input id="hostTarget" placeholder="#player or +1" spellcheck="false" />
+        <button id="addHost" type="button">Add</button>
+      </div>
+      <p id="hostError" class="field-error" role="alert"></p>
+      <ul id="hostList" class="rule-list"></ul>
     </div>
 
     <div class="actions">

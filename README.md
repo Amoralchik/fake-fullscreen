@@ -124,6 +124,21 @@ double-click on the picture does — and <kbd>Esc</kbd> closes an open player
 menu before it closes the theater. The exit control is a small, low-contrast
 icon that fades with the mouse, like the player's own controls.
 
+**Player controls not responding? Pick the right layer.** Theater mode
+elevates one element. If that is the bare `<video>`, the player's control
+layers stay behind and clicks or keys never reach them. On YouTube the right
+element is `div#movie_player`, not `video.html5-main-video`, and that rule
+ships built in. For any other site, open theater mode, then in the toolbar
+panel's **Player layer** card use **▲ Outer / ▼ Inner** to step to the
+element that holds the controls, and **Save for site**. The rule is stored
+as a CSS selector (e.g. `#movie_player`) when the element has a stable one,
+otherwise as a ±N layer offset from the automatic choice. Rules apply per
+site (subdomains included) and per content type (*Video* today), beat the
+automatic choice on every entry path (button, shortcut, fullscreen redirect,
+right-click), and are never downgraded by the rescue ladder.
+**Automatic** in the card, or × in Settings → *Player container per site*,
+forgets a rule.
+
 **Pick anything, not just detected videos.** The control panel's
 *Select element…* button arms an element picker: hover the page and
 whatever is under the cursor gets outlined (with a `tag#id.class` label) —
@@ -141,6 +156,8 @@ the embed's own fullscreen button toggles the theater too.
 - **Redirect native fullscreen to theater mode** (on by default)
 - **Per-site on/off rules** — a default (run everywhere vs opt-in) plus an
   explicit domain list, each rule toggled On or Off (subdomains included)
+- **Per-site player container** — domain + type (*Video*) + CSS selector or
+  ±N layers; YouTube / youtube-nocookie → `#movie_player` preset
 - Show/hide the floating buttons; hover-only visibility
 - Hide native controls while in theater
 - Click-outside-to-exit toggle
@@ -234,7 +251,8 @@ to open tabs immediately.
 | Button style / position offsets | `.ffs-btn` in `content.css`, `BTN_MARGIN_PX` in `content.js` |
 | Button idle fade / minimum video size | `IDLE_HIDE_MS`, `MIN_W` / `MIN_H`, `isDecorative()` in `content.js` |
 | Theater geometry (e.g. fill vs letterbox) | `video.ffs-video--theater` in `content.css` |
-| Default settings | `DEFAULTS` in `content.js` **and** `options.js` (keep in sync) |
+| Default settings (incl. built-in container rules) | `DEFAULTS` in `content.js` **and** `options.js` (keep in sync) |
+| Container rules / layer stepping | `hostRuleFor()` / `hostFromRule()` / `stepLayer()` / `selectorFor()` in `content.js` |
 | Keyboard shortcut | `commands` in `manifest.json`, or browser settings UI |
 | Shortcut / context-menu routing, badge | `background.js` |
 | Icons | edit shapes in `tools/gen_icons.py`, then `python3 tools/gen_icons.py` |
@@ -294,6 +312,10 @@ Brave or Edge (or any path you pass). `FFS_EXT_DIR=dist/chromium` (or
 - [ ] YouTube in theater: drag the seek bar / double-click it, change volume,
       open ⚙ settings and press <kbd>Esc</kbd> (closes the menu, not the
       theater) — the theater stays open throughout.
+- [ ] YouTube theater uses `#movie_player` (panel's Player layer card says
+      so); ▼ Inner to the bare video breaks the controls, ▲ Outer fixes it.
+- [ ] Player layer → *Save for site* on another site; reload → theater
+      opens on the saved layer; *Automatic* forgets it.
 - [ ] Right-click a video → *Fake fullscreen this video* toggles it.
 - [ ] Control panel → *Theater mode for this tab's video* toggles.
 - [ ] Same checks in Chrome/Brave (unpacked) and Firefox/Zen.

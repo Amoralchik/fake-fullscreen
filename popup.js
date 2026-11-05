@@ -102,6 +102,9 @@ function updateMasterHint() {
  * ---------------------------------------------------------------- */
 
 async function init() {
+  // Version from the manifest — never goes stale in the markup.
+  $('ver').textContent = `v${ext.runtime.getManifest().version}`;
+
   const area = await getStorageArea();
   state = { ...PANEL_DEFAULTS, ...(await area.get(PANEL_DEFAULTS)) };
 
@@ -157,6 +160,9 @@ async function init() {
     window.close();
   });
 
+  // "Player layer" card (only while a theater is live in this tab).
+  initLayerCard();
+
   $('siteEnabled').addEventListener('change', async (e) => {
     if (!siteHost) return;
     const desired = e.target.checked;
@@ -177,6 +183,46 @@ async function init() {
     ext.runtime.openOptionsPage();
     window.close();
   });
+}
+
+/* ------------------------------------------------------------------
+ * Player layer card — the frame owning the live theater answers
+ * ffs:host-* messages (see content.js); every other frame stays silent.
+ * ---------------------------------------------------------------- */
+
+async function askTheaterFrame(type, extra) {
+  try {
+    const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id == null) return null;
+    return (await ext.tabs.sendMessage(tab.id, { type, ...extra })) || null;
+  } catch {
+    return null;
+  }
+}
+
+function renderLayer(info) {
+  const section = $('layerSection');
+  if (!info) { section.hidden = true; return; }
+  section.hidden = false;
+  $('layerEl').textContent = info.label;
+  $('layerEl').title = info.label;
+  $('layerUp').disabled = !info.canUp;
+  $('layerDown').disabled = !info.canDown;
+  $('layerSave').title = `Remember this container for ${info.hostname.replace(/^www\./, '') || 'this site'}`;
+  const r = info.rule;
+  $('layerStatus').textContent = r
+    ? `Using the ${r.domain} rule: ${r.selector || `${r.levels > 0 ? '+' : ''}${r.levels} layer(s)`}`
+    : 'Detected automatically — not saved';
+  $('layerAuto').disabled = !r;
+}
+
+async function initLayerCard() {
+  renderLayer(await askTheaterFrame('ffs:host-info'));
+  const act = (type, extra) => async () => renderLayer(await askTheaterFrame(type, extra));
+  $('layerUp').addEventListener('click', act('ffs:host-step', { dir: 1 }));
+  $('layerDown').addEventListener('click', act('ffs:host-step', { dir: -1 }));
+  $('layerSave').addEventListener('click', act('ffs:host-save'));
+  $('layerAuto').addEventListener('click', act('ffs:host-auto'));
 }
 
 init().catch(console.error);

@@ -42,6 +42,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>player</ti
   #gif { width: 320px; height: 180px; display: block; margin: 20px; }
 </style></head><body>
 <header>masthead</header>
+<div id="outer">
 <div id="player">
   <video id="vid"></video>
   <div id="bar">
@@ -49,6 +50,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>player</ti
     <div id="seek" role="slider" aria-label="Seek"></div>
     <button id="fs">fullscreen</button>
   </div>
+</div>
+<div id="related" style="height:200px">related videos (makes #outer page layout, not player)</div>
 </div>
 <video id="gif" muted loop></video>
 <p style="height:1500px">filler</p>
@@ -203,7 +206,51 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(200);
     check('Esc exits', await page.evaluate(() => !document.querySelector('.ffs-theater-host')));
 
-    console.log('6. Control panel loads in Chromium');
+    console.log('6. Per-site player container rules + layer stepping');
+    const tabId = await sw.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id);
+    const send = (msg) => sw.evaluate(([id, m]) => chrome.tabs.sendMessage(id, m), [tabId, msg]);
+    const hostId = () => page.evaluate(() => document.querySelector('.ffs-theater-host')?.id || null);
+    const stored = () => sw.evaluate(async () => (await chrome.storage.sync.get('siteHosts')).siteHosts);
+
+    await sw.evaluate(() => chrome.storage.sync.set({
+      siteHosts: [{ domain: '127.0.0.1', kind: 'video', selector: '#outer' }],
+    }));
+    await sleep(300);
+    await sw.evaluate(() => getActiveTabId().then(beginProbe));
+    await sleep(600);
+    check('selector rule picks its container instead of the auto one', (await hostId()) === 'outer', await hostId());
+    let info = await send({ type: 'ffs:host-info' });
+    check('host-info reports the rule', info && info.rule && info.rule.selector === '#outer', info);
+    info = await send({ type: 'ffs:host-step', dir: -1 });
+    check('▼ Inner steps to the player container', (await hostId()) === 'player' && info.label.startsWith('div#player'), info);
+    info = await send({ type: 'ffs:host-step', dir: -1 });
+    check('▼ Inner again reaches the bare video', info && info.label.startsWith('video#vid') && !info.canDown, info);
+    info = await send({ type: 'ffs:host-step', dir: 1 });
+    check('▲ Outer goes back to the player', (await hostId()) === 'player', info);
+    info = await send({ type: 'ffs:host-save' });
+    let rules = await stored();
+    check('Save for site stores a selector rule first',
+      rules[0].domain === '127.0.0.1' && rules[0].selector === '#player' && rules.length === 1, rules);
+    check('panel shows the saved rule', info && info.rule && info.rule.selector === '#player', info);
+    await page.keyboard.press('Escape');
+    await sleep(200);
+    // levels rule: +1 from the automatic choice (#player) → #outer
+    await sw.evaluate(() => chrome.storage.sync.set({
+      siteHosts: [{ domain: '127.0.0.1', kind: 'video', levels: 1 }],
+    }));
+    await sleep(300);
+    await page.click('#fs');
+    await sleep(400);
+    check('levels rule (+1) applies to the fullscreen redirect too', (await hostId()) === 'outer', await hostId());
+    info = await send({ type: 'ffs:host-auto' });
+    rules = await stored();
+    check('Automatic removes the site rule', rules.length === 0, rules);
+    check('…and re-detects the container', (await hostId()) === 'player', await hostId());
+    await page.keyboard.press('Escape');
+    await sleep(200);
+    check('no frame answers host-info without a theater', (await send({ type: 'ffs:host-info' })) == null);
+
+    console.log('7. Control panel loads in Chromium');
     const extId = new URL(sw.url()).host;
     const popup = await ctx.newPage();
     const popupErrors = [];

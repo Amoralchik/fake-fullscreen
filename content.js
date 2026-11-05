@@ -98,6 +98,17 @@
     masterEnabled:     true,   // global kill switch
     defaultEnabled:    true,   // sites with no rule are on/off by default
     siteRules:         [],     // [{ domain: 'example.com', enabled: true }]
+    // Per-site player CONTAINER rules — which element becomes the theater
+    // for a given kind of content. kind: 'video' (the only auto-detected
+    // kind today; the field leaves room for others). target is either
+    //   selector: CSS selector, matched as video.closest(selector), or
+    //   levels:   ±N steps from the auto-detected container (+ = outward)
+    // Ships with YouTube's player root: its controls live in #movie_player,
+    // and theatering the bare <video> leaves them unreachable.
+    siteHosts: [
+      { domain: 'youtube.com', kind: 'video', selector: '#movie_player' },
+      { domain: 'youtube-nocookie.com', kind: 'video', selector: '#movie_player' },
+    ],
     preventNativeFullscreen: true, // redirect requestFullscreen → theater mode
     buttonEnabled:     true,   // show floating buttons on videos
     buttonHoverOnly:   true,   // only show them near the cursor
@@ -601,10 +612,13 @@
    *   the picker elevates an element with no reachable video (an iframe
    *   embed, a closed shadow root) — then `host` is REQUIRED
    * @param {Element} [host]  element to elevate — the fullscreen request
-   *   target when redirected (authoritative), the picked element from the
-   *   picker, else the climb-up heuristic
+   *   target when redirected, the picked element from the picker, else
+   *   the climb-up heuristic
+   * @param {{explicit?: boolean}} [opts]  explicit: the caller chose the
+   *   host on purpose (picker, layer up/down, ladder downgrade) — skip the
+   *   per-site container rules and keep that host
    */
-  function enterTheater(video, host) {
+  function enterTheater(video, host, opts = {}) {
     if (theater) exitTheater(); // switching videos restores the old one first
     if (video && !video.isConnected) return;
     if (iframeTheaterAbove) return; // a parent frame owns this frame's theater
@@ -615,9 +629,21 @@
     } else if (
       video &&
       host.ownerDocument === video.ownerDocument && // cross-doc (iframe) picks keep their host
-      !host.contains(video)
+      !containsDeep(host, video)
     ) {
       host = findPlayerHost(video);
+    }
+
+    // Per-site container rule (e.g. YouTube → #movie_player). A host the
+    // user chose — by rule or explicitly — is "pinned": the rescue ladder
+    // may lift it into the top layer but never swaps it for something else.
+    let pinned = !!opts.explicit;
+    let rule = null;
+    if (video && !opts.explicit) {
+      rule = hostRuleFor('video');
+      const ruled = rule ? hostFromRule(rule, video, host) : null;
+      if (ruled) { host = ruled; pinned = true; }
+      else rule = null;
     }
 
     const saved = {
@@ -640,6 +666,8 @@
       usedPopover: false,
       buttonPopover: false,
       stretched: [],
+      pinned,
+      rule, // the site rule that chose this host, if any
     };
 
     // A bare video theaters itself; a container keeps its own controls.
@@ -811,10 +839,17 @@
       return;
     }
 
+    // A pinned host (site rule / layer step) is what the user asked for:
+    // never downgrade it to the bare <video> — on YouTube that is exactly
+    // the mode where the player's controls stop working. Leave it lifted
+    // as far as the ladder got; layer up/down in the panel can adjust it.
+    if (theater.pinned) return;
+
     if (video && host !== video) {
       const v = video;
       exitTheater();
-      enterTheater(v, v); // bare-video mode; its own ladder starts fresh
+      enterTheater(v, v, { explicit: true }); // bare-video mode; its own ladder starts fresh
+      if (theater) theater.pinned = false; // a downgrade, not a user choice
       return;
     }
 
@@ -851,6 +886,185 @@
       }
     }
     return true;
+  }
+
+  /* ================================================================
+   * Per-site player containers — rules, layer up/down, "save for site"
+   *
+   * Auto-detection picks the element to theater; for some sites it lands
+   * one layer too low or too high (YouTube: the bare <video> instead of
+   * #movie_player, whose layers carry the controls). The control panel
+   * lets you step the live theater one layer up/down and save the result
+   * for the site — as a CSS selector when the element has a stable one,
+   * else as a ±N offset from the auto-detected container.
+   * ================================================================ */
+
+  /** Parent across open shadow-root boundaries. */
+  function parentDeep(el) {
+    if (el.parentElement) return el.parentElement;
+    const root = el.getRootNode && el.getRootNode();
+    return root && root.host ? root.host : null;
+  }
+
+  function containsDeep(ancestor, node) {
+    for (let n = node; n; n = parentDeep(n)) if (n === ancestor) return true;
+    return false;
+  }
+
+  /** First rule for this site + content kind ('video'). */
+  function hostRuleFor(kind) {
+    const host = currentHostname();
+    if (!host) return null;
+    for (const r of settings.siteHosts || []) {
+      if (r && r.kind === kind && domainMatches(r.domain, host)) return r;
+    }
+    return null;
+  }
+
+  /** Apply a rule; null when it doesn't fit this page (fall back to auto). */
+  function hostFromRule(rule, video, autoHost) {
+    if (rule.selector) {
+      let el = null;
+      try {
+        for (let n = video; n && !el; n = parentDeep(n)) {
+          if (n.matches && n.matches(rule.selector)) el = n;
+        }
+      } catch { return null; } // invalid selector
+      return el && !isPageLevel(el) ? el : null;
+    }
+    const levels = Number(rule.levels);
+    if (Number.isInteger(levels) && levels !== 0) return shiftLayer(autoHost, video, levels);
+    return null;
+  }
+
+  /**
+   * Move n layers from `host`: n > 0 outward (parents), n < 0 inward
+   * (towards the video). Never past the page level, never below the video.
+   */
+  function shiftLayer(host, video, n) {
+    let el = host;
+    if (n > 0) {
+      for (let i = 0; i < n; i++) {
+        const up = parentDeep(el);
+        if (!up || isPageLevel(up)) break;
+        el = up;
+      }
+    } else {
+      for (let i = 0; i < -n && el !== video; i++) {
+        // the child of `el` on the path down to the video
+        let child = video;
+        while (child && parentDeep(child) !== el) child = parentDeep(child);
+        if (!child) break;
+        el = child;
+      }
+    }
+    return el;
+  }
+
+  /** "div#movie_player.html5-video-player" — for labels. */
+  function describeEl(el) {
+    let text = el.tagName.toLowerCase();
+    if (el.id) text += `#${el.id}`;
+    const cls = typeof el.className === 'string'
+      ? el.className.trim().split(/\s+/).filter((c) => c && !c.startsWith('ffs-')).slice(0, 2).join('.')
+      : '';
+    if (cls) text += `.${cls}`;
+    return text;
+  }
+
+  /**
+   * A selector that finds `host` again from the video on future pages:
+   * a plain #id, else tag + up to two classes. Must resolve back to this
+   * very element via closest(), or null (then a ±N offset is saved).
+   */
+  function selectorFor(host, video) {
+    const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+    const candidates = [];
+    // ids with long digit runs are usually generated per page — skip those
+    if (host.id && !/\d{3,}/.test(host.id)) candidates.push(`#${esc(host.id)}`);
+    const classes = typeof host.className === 'string'
+      ? host.className.trim().split(/\s+/).filter((c) => c && !c.startsWith('ffs-') && !/\d{3,}/.test(c))
+      : [];
+    const tag = host.tagName.toLowerCase();
+    if (classes.length) candidates.push(`${tag}.${classes.slice(0, 2).map(esc).join('.')}`);
+    if (classes.length) candidates.push(`${tag}.${esc(classes[0])}`);
+    for (const sel of candidates) {
+      try {
+        if (hostFromRule({ selector: sel }, video, host) === host) return sel;
+      } catch { /* try the next */ }
+    }
+    return null;
+  }
+
+  /** Signed layer distance from the auto-detected container to `host`. */
+  function layerOffset(host, video) {
+    const auto = findPlayerHost(video);
+    if (auto === host) return 0;
+    let n = 0;
+    for (let el = auto; el; el = parentDeep(el)) { if (el === host) return n; n++; }
+    n = 0;
+    for (let el = host; el; el = parentDeep(el)) { if (el === auto) return -n; n++; }
+    return 0;
+  }
+
+  /** Live theater → panel description. */
+  function theaterInfo() {
+    if (!theater) return null;
+    const { host, video, rule } = theater;
+    return {
+      hostname: currentHostname(),
+      label: describeEl(host),
+      canUp: !!video && !isPageLevel(parentDeep(host) || document.documentElement),
+      canDown: !!video && host !== video,
+      kind: video ? 'video' : null,
+      rule: rule ? { domain: rule.domain, selector: rule.selector || null, levels: rule.levels || null } : null,
+    };
+  }
+
+  /** Panel's ▲/▼: re-theater one layer up/down, keeping it pinned. */
+  function stepLayer(dir) {
+    if (!theater || !theater.video) return;
+    const { video, host } = theater;
+    const next = shiftLayer(host, video, dir > 0 ? 1 : -1);
+    if (next === host) return;
+    exitTheater();
+    enterTheater(video, next, { explicit: true });
+  }
+
+  /** Panel's "Save for site": persist the live host as this site's rule. */
+  async function saveLayerRule() {
+    if (!theater || !theater.video) return null;
+    const { video, host } = theater;
+    const domain = currentHostname().replace(/^www\./, '');
+    if (!domain) return null;
+    const selector = selectorFor(host, video);
+    const levels = selector ? 0 : layerOffset(host, video);
+    const rule = selector
+      ? { domain, kind: 'video', selector }
+      : { domain, kind: 'video', levels };
+    const area = await getStorageArea();
+    const { siteHosts } = await area.get({ siteHosts: DEFAULTS.siteHosts });
+    const rest = (siteHosts || []).filter((r) => !(r && r.kind === 'video' && r.domain === domain));
+    // Most specific first: a saved site rule must beat broader ones.
+    await area.set({ siteHosts: [rule, ...rest] });
+    settings.siteHosts = [rule, ...rest];
+    theater.rule = rule;
+    return rule;
+  }
+
+  /** Panel's "Use automatic": drop this site's rule, re-detect. */
+  async function clearLayerRule() {
+    const host = currentHostname();
+    const area = await getStorageArea();
+    const { siteHosts } = await area.get({ siteHosts: DEFAULTS.siteHosts });
+    const rest = (siteHosts || []).filter((r) => !(r && r.kind === 'video' && domainMatches(r.domain, host)));
+    await area.set({ siteHosts: rest });
+    settings.siteHosts = rest;
+    if (theater && theater.video) {
+      const v = theater.video;
+      exitTheater();
+      enterTheater(v);
+    }
   }
 
   /* ================================================================
@@ -1057,7 +1271,7 @@
     // Cross-origin embed: the frame inside must stand down while its
     // <iframe> is theatered from out here.
     if (!pick.video && pick.host instanceof HTMLIFrameElement) setIframeSuppression(true);
-    enterTheater(pick.video, pick.host);
+    enterTheater(pick.video, pick.host, { explicit: !!pick.host });
     if (theater && !theater.video) {
       showToast(pick.host instanceof HTMLIFrameElement
         ? 'Theatering the embedded player — Esc exits'
@@ -1447,6 +1661,29 @@
         });
         return undefined;
       }
+
+      // Control panel's "Player layer" card. Only the frame that owns the
+      // live theater answers (it may be an embed, not the top frame).
+      case 'ffs:host-info':
+        if (!theater) return undefined;
+        sendResponse(theaterInfo());
+        return undefined;
+
+      case 'ffs:host-step':
+        if (!theater) return undefined;
+        stepLayer(msg.dir);
+        sendResponse(theaterInfo());
+        return undefined;
+
+      case 'ffs:host-save':
+        if (!theater) return undefined;
+        saveLayerRule().then(() => sendResponse(theaterInfo()), () => sendResponse(theaterInfo()));
+        return true; // async sendResponse
+
+      case 'ffs:host-auto':
+        if (!theater) return undefined;
+        clearLayerRule().then(() => sendResponse(theaterInfo()), () => sendResponse(theaterInfo()));
+        return true;
 
       // Right-click → "Fake fullscreen this video" (background routes it
       // to the frame the menu was opened in).

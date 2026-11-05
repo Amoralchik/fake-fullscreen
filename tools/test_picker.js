@@ -23,11 +23,11 @@ function check(name, cond, extra) {
   }
 }
 
-function makeEnv(html) {
+function makeEnv(html, url = 'https://example.com/watch') {
   const dom = new JSDOM(html, {
     pretendToBeVisual: true,
     runScripts: 'outside-only',
-    url: 'https://example.com/watch',
+    url,
   });
   const { window } = dom;
   const { document } = window;
@@ -299,6 +299,50 @@ const pageHTML = `<!DOCTYPE html><html><body>
     await env.flush();
     check('relayed suppression exits local theater',
       !env.document.getElementById('player').classList.contains('ffs-theater-host'));
+  }
+
+  // --------------------------------------------------------------------
+  console.log('9. YouTube: built-in rule theaters #movie_player, not the bare video');
+  {
+    // Shape where the climb heuristic stops at the <video>: the player root
+    // is far bigger than the (letterboxed) video, so auto-detection alone
+    // would theater the bare video — and the controls would be unreachable.
+    const yt = `<!DOCTYPE html><html><body>
+      <div id="movie_player" class="html5-video-player ytp-transparent" data-rect="0,56,1280,720">
+        <div class="html5-video-container" data-rect="0,0,0,0">
+          <video class="html5-main-video" data-rect="400,56,480,270"></video>
+        </div>
+        <div class="ytp-chrome-bottom" data-rect="12,720,1256,48"></div>
+      </div>
+    </body></html>`;
+    const env = makeEnv(yt, 'https://www.youtube.com/watch?v=x');
+    await env.load;
+    await env.flush();
+    const video = env.document.querySelector('video');
+    env.window.innerWidth = 1280; env.window.innerHeight = 800;
+    // Nothing "paints" (no layout in jsdom): the rescue ladder escalates
+    // every frame — a pinned host must survive it instead of being
+    // downgraded to the bare video.
+    env.document.elementFromPoint = () => null;
+    env.deliver({ type: 'ffs:toggle' });
+    await new Promise((r) => setTimeout(r, 200)); // let the ladder run out
+    const mp = env.document.getElementById('movie_player');
+    check('#movie_player is the theater host', mp.classList.contains('ffs-theater-host'));
+    check('video fills it (not theatered bare)', video.classList.contains('ffs-video--fill') &&
+      !video.classList.contains('ffs-video--theater'));
+    env.window.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await env.flush();
+
+    // Same page on another site: no rule → automatic choice
+    const env2 = makeEnv(yt, 'https://example.org/');
+    await env2.load;
+    await env2.flush();
+    env2.window.innerWidth = 1280; env2.window.innerHeight = 800;
+    env2.document.elementFromPoint = (x, y) => env2.document.querySelector('video');
+    env2.deliver({ type: 'ffs:toggle' });
+    await env2.flush();
+    check('without a rule the auto choice applies (bare video here)',
+      env2.document.querySelector('video').classList.contains('ffs-video--theater'));
   }
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
