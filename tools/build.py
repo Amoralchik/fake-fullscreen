@@ -13,9 +13,14 @@ this script writes a tailored manifest per target:
   dist/chromium/  + dist/fake-fullscreen-<ver>-chromium.zip  → Chrome Web Store / Edge Add-ons
       background.service_worker only, no browser_specific_settings,
       minimum_chrome_version 121
+  dist/SHA256SUMS.txt                                         → release checksums
+
+GitHub Releases: pushing a vX.Y.Z tag runs .github/workflows/release.yml,
+which runs this script and attaches the zips + checksums to the release.
 
 Run:  python3 tools/build.py
 """
+import hashlib
 import json
 import shutil
 import zipfile
@@ -64,12 +69,17 @@ def build(name, transform, base):
             if p.is_file():
                 z.write(p, p.relative_to(out).as_posix())  # manifest.json at zip root
     print(f"{name:9} -> {archive.relative_to(ROOT)}")
+    return archive
 
 
 def main():
     base = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    build("firefox", firefox, base)
-    build("chromium", chromium, base)
+    archives = [build("firefox", firefox, base), build("chromium", chromium, base)]
+    # Checksums for the release page (sha256sum -c SHA256SUMS.txt).
+    sums = "".join(
+        f"{hashlib.sha256(a.read_bytes()).hexdigest()}  {a.name}\n" for a in archives)
+    (DIST / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
+    print("checksums -> dist/SHA256SUMS.txt")
 
 
 if __name__ == "__main__":

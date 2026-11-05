@@ -1,0 +1,72 @@
+# Build the Firefox and Chromium packages and attach them to a GitHub
+# Release whenever a version tag is pushed:
+#
+#   git tag v1.6.0 && git push origin v1.6.0
+#
+# The tag must match manifest.json's "version" (v1.6.0 ↔ "1.6.0").
+# If a release for the tag already exists (e.g. you wrote the notes by
+# hand first), the packages are uploaded to it; otherwise one is created
+# with GitHub's generated notes. Re-run for an existing tag from the
+# Actions tab ("Run workflow") to rebuild its packages.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.5.0"
+        required: true
+
+permissions:
+  contents: write # create the release / upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Tag matches manifest version
+        run: |
+          VER=$(python -c "import json; print(json.load(open('manifest.json'))['version'])")
+          if [ "$TAG" != "v$VER" ]; then
+            echo "::error::Tag $TAG does not match manifest.json version $VER"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: |
+          npm i jsdom@25 --no-save --no-audit --no-fund
+          node tools/test_picker.js
+
+      - name: Build packages
+        run: python tools/build.py
+
+      - name: Lint the Firefox package (AMO rules)
+        run: npx --yes web-ext@8 lint --source-dir dist/firefox --warnings-as-errors
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${TAG#v}"
+          FILES="dist/fake-fullscreen-$VER-firefox.zip dist/fake-fullscreen-$VER-chromium.zip dist/SHA256SUMS.txt"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber
+          else
+            gh release create "$TAG" $FILES --title "$TAG" --generate-notes --verify-tag
+          fi
