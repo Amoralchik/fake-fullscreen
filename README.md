@@ -268,6 +268,32 @@ and `dist/chromium/` + `dist/fake-fullscreen-<ver>-chromium.zip` (for the
 Chrome Web Store / Edge Add-ons), each with a manifest tailored to that
 store. The repo root itself stays loadable unpacked in both families.
 
+## Releases
+
+Downloads for both browser families live on
+[GitHub Releases](https://github.com/Amoralchik/fake-fullscreen/releases).
+To cut a new one:
+
+1. Bump `"version"` in `manifest.json` (e.g. `1.6.0`) and merge to `main`.
+2. Tag and push:
+
+   ```sh
+   git tag v1.6.0 && git push origin v1.6.0
+   ```
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) checks that
+the tag matches the manifest version, runs the unit tests, builds both
+packages, lints the Firefox one with AMO's rules, and attaches
+`fake-fullscreen-<ver>-firefox.zip`, `…-chromium.zip` and `SHA256SUMS.txt`
+to the release. If you create the release (with hand-written notes) before
+pushing the tag, the files are added to it; otherwise GitHub generates the
+notes.
+
+Store listings are separate uploads: the Firefox zip goes to the
+[AMO Developer Hub](https://addons.mozilla.org/developers/) (*Upload New
+Version*), and the Chromium zip to the Chrome Web Store / Edge Add-ons
+dashboards.
+
 ## Tests
 
 ```sh
