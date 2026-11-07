@@ -35,12 +35,15 @@ fake-fullscreen/
 
 ## Install
 
-**From the official store (recommended):** the extension is signed and
-published on [Mozilla Add-ons (AMO)](https://addons.mozilla.org/en-US/firefox/addon/fake-fullscreen-theater-mode/)
-— works in **Firefox** and **Zen Browser**. Click *Add to Firefox* and
-updates arrive automatically.
+**From the official stores (recommended)** — updates arrive automatically:
 
-### Chrome, Brave, Edge (unpacked)
+- **Firefox / Zen Browser:** [Mozilla Add-ons (AMO)](https://addons.mozilla.org/en-US/firefox/addon/fake-fullscreen-theater-mode/)
+  → *Add to Firefox*.
+- **Chrome, Brave, Edge and other Chromium browsers:**
+  [Chrome Web Store](https://chromewebstore.google.com/detail/fake-fullscreen-%E2%80%93-theater/mbnoeaojecgjfpkgmkbnekfgkohiapbi)
+  → *Add to Chrome*. (Edge: allow extensions from other stores when prompted.)
+
+### Chrome, Brave, Edge — unpacked for development
 
 1. Open **`chrome://extensions`** (Brave: `brave://extensions`, Edge:
    `edge://extensions`).

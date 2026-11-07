@@ -4,6 +4,10 @@ Paste-ready text for the Chrome Web Store Developer Dashboard (also works
 for Edge Add-ons). Package to upload: `fake-fullscreen-<ver>-chromium.zip`
 from the GitHub release, or `python3 tools/build.py`.
 
+**Status:** approved and live (Nov 2026) —
+<https://chromewebstore.google.com/detail/fake-fullscreen-%E2%80%93-theater/mbnoeaojecgjfpkgmkbnekfgkohiapbi>
+(extension ID `mbnoeaojecgjfpkgmkbnekfgkohiapbi`).
+
 ---
 
 ## Store listing tab
